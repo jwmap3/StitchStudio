@@ -1,0 +1,82 @@
+name: Build Stitch Studio
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.7' }
+      - name: Build APK
+        working-directory: android
+        env: { BUILD_NUMBER: '${{ github.run_number }}' }
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+      - run: cp android/app/build/outputs/apk/release/app-release.apk StitchStudio.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: apk, path: StitchStudio.apk }
+
+  windows:
+    name: Windows desktop app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Bundle the editor into the app
+        shell: pwsh
+        run: Copy-Item -Recurse -Force web electron/web
+      - name: Build installer + portable exe
+        working-directory: electron
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+        run: |
+          npm install --no-audit --no-fund
+          npx electron-builder --win nsis portable --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            electron/dist/StitchStudio-Setup.exe
+            electron/dist/StitchStudio-Portable.exe
+
+  release:
+    name: Publish "latest" release
+    needs: [apk, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Publish
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          ls -la out
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest out/StitchStudio.apk out/StitchStudio-Setup.exe out/StitchStudio-Portable.exe \
+            --title "Stitch Studio (build ${{ github.run_number }})" \
+            --notes "Phone: StitchStudio.apk. PC: StitchStudio-Setup.exe (installs with a Start-menu shortcut) or StitchStudio-Portable.exe (runs without installing). Build ${{ github.run_number }}."
+
+  pages:
+    name: Web version (GitHub Pages)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: web }
+      - id: deploy
+        uses: actions/deploy-pages@v4

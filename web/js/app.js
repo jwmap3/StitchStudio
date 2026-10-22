@@ -207,6 +207,7 @@
     if (dragId != null && !preview) { drawDragging(); return; }
     drawScene(null);
     lastView = Object.assign({}, view);
+    if (window.onSSDraw) try { window.onSSDraw(); } catch (e) { console.error(e); }
   }
   function drawDragging() {
     const key = dragId + '|' + view.s + '|' + view.x + '|' + view.y + '|' + cv.width + 'x' + cv.height;
@@ -1670,5 +1671,22 @@
   updateUndo();
   setTool('select');
   requestAnimationFrame(() => { resize(); fit(); });
+  // public interface used by the desktop edition (pc.js)
+  window.SS = {
+    doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
+    select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
+    setTool, renderSheet, draw, drawNow, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
+    autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
+    loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
+    openFileInput(id, file) { const inp = $(id); const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files; inp.dispatchEvent(new Event('change')); },
+    setPreview(on) { if (preview !== !!on) $('#bPreview').click(); },
+    setProgress(p) { progress = Math.max(0, Math.min(1, p)); const el = $('#r_pp'); if (el) { el.value = Math.round(progress * 100); const v = $('#r_pp_v'); if (v) v.textContent = Math.round(progress * 100) + '%'; } draw(); },
+    progress: () => progress,
+    zoomTo(s) { const r = cv.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, mm = toMM(cx, cy); view.s = s; view.x = cx - mm[0] * s; view.y = cy - mm[1] * s; draw(); },
+    pan(dx, dy) { view.x += dx; view.y += dy; draw(); },
+    Render, Stitch: S, hitObject, IN, threadName,
+    bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
+  };
   window.__ss = { selId: () => selId, tool: () => tool, drawNow, zoom: (x, y, f) => { const r = cv.getBoundingClientRect(); view.s *= f; view.x = r.width / 2 - x * view.s; view.y = r.height / 2 - y * view.s; draw(); }, toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
 })();

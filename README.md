@@ -2,6 +2,10 @@
 
 Phone-first embroidery digitizer. Trace an image into stitches by hand or automatically, then export **VP3** (Husqvarna Viking / Pfaff) or **DST** (Tajima).
 
+**Windows PC:** from [the latest release](../../releases/latest) download `StitchStudio-Setup.exe` (installs, adds a Start-menu shortcut) or `StitchStudio-Portable.exe` (runs without installing). Windows may show "Windows protected your PC" because the app isn't code-signed: click *More info → Run anyway*.
+
+**Any browser on a PC:** turn on GitHub Pages once (repo *Settings → Pages → Source: GitHub Actions*), then open `https://jwmap3.github.io/StitchStudio/pc.html`.
+
 **Install on Android:** open [the latest release](../../releases/latest) on your phone, download `StitchStudio.apk`, and open it. Android will ask you to allow installs from your browser/files app the first time.
 
 ## Tools
@@ -24,10 +28,19 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 
 Files are saved to `Downloads/StitchStudio`.
 
+## Desktop edition (PC)
+Same engine as the phone app, with a desktop interface (`web/pc.html` + `web/js/pc.js`, packaged by `electron/`):
+- Menu bar, toolbar, tool palette, docked Properties and Layers panels, inch rulers, status bar (cursor position, zoom, stitches, colours, trims, size, sew time, hoop fit).
+- Layers: drag to reorder, double-click to rename, show/hide, sew first/last.
+- Keyboard shortcuts (press `?` in the app), arrow-key nudging, right-click layer menu, space/middle-mouse pan, actual-size zoom.
+- Drag & drop pictures, VP3/DST and projects; paste screenshots straight from the clipboard; copy/paste layers.
+- Sew-out simulation with speed control; realistic PNG mockup export; printable production worksheet (thread sequence, stitch counts, size, hoop, time); Save / Save As to a folder you choose.
+
 ## Layout
 - `web/`: the editor (HTML/JS, no dependencies). Open `web/index.html` in a browser to try it on a computer.
   - `js/stitch.js`: stitch engine (tatami, flow fill, satin, run, ties/trims) and DST/VP3 writers
   - `js/trace.js`: colour reduction and outline tracing
   - `js/app.js`: the editor UI
 - `android/`: thin WebView app that packages `web/` and saves exports to Downloads.
-- `.github/workflows/build-apk.yml`: builds the APK on every push and publishes it as the `latest` release.
+- `electron/`: Windows desktop wrapper (installer + portable exe).
+- `.github/workflows/build.yml`: on every push builds the APK and the Windows apps, publishes them to the `latest` release, and deploys the web version to GitHub Pages (if enabled).

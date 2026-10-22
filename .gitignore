@@ -2,5 +2,8 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+electron/node_modules/
+electron/dist/
+electron/web/
 *.iml
 .idea/

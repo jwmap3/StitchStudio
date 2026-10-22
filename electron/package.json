@@ -1,0 +1,19 @@
+{
+  "name": "stitch-studio",
+  "productName": "Stitch Studio",
+  "version": "1.0.0",
+  "description": "Embroidery digitizer for VP3 / DST — desktop edition",
+  "author": "jwmap3",
+  "main": "main.js",
+  "scripts": { "start": "electron .", "dist": "electron-builder --win nsis portable --publish never" },
+  "devDependencies": { "electron": "31.7.7", "electron-builder": "24.13.3" },
+  "build": {
+    "appId": "com.jwmap3.stitchstudio",
+    "productName": "Stitch Studio",
+    "files": ["main.js", "web/**/*"],
+    "directories": { "buildResources": "build", "output": "dist" },
+    "win": { "icon": "build/icon.png", "target": ["nsis", "portable"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "artifactName": "StitchStudio-Setup.exe", "shortcutName": "Stitch Studio" },
+    "portable": { "artifactName": "StitchStudio-Portable.exe" }
+  }
+}

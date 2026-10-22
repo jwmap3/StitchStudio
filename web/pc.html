@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stitch Studio Desktop</title>
+<style>
+@font-face{font-family:'Graduate';src:url(fonts/graduate.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'Anton';src:url(fonts/anton.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'Roboto Slab SS';src:url(fonts/roboto-slab-700.woff2) format('woff2');font-weight:700}
+:root{
+  --bg:#14161b; --panel:#1d2027; --panel2:#262a33; --panel3:#2f3440; --line:#333845; --text:#e9ecf2; --muted:#98a1b1;
+  --accent:#f2b134; --accent-ink:#1b1400; --blue:#4cc2ff; --danger:#e5484d; --ok:#3fb950;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font:inherit}
+#app{position:fixed;inset:0;display:grid;grid-template-columns:64px 1fr 340px;grid-template-rows:34px 40px 1fr 26px;grid-template-areas:"menu menu menu" "bar bar bar" "tools stage side" "status status status"}
+/* menubar */
+#menubar{grid-area:menu;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--line)}
+#menubar .brand{font-weight:700;margin-right:10px;letter-spacing:.02em}
+#menubar .brand span{color:var(--accent)}
+.mb{padding:6px 10px;border-radius:6px}
+.mb:hover,.mb.open{background:var(--panel3)}
+#title{margin-left:auto;color:var(--muted);max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dd{position:fixed;min-width:280px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.5);padding:6px;display:none;z-index:40}
+.dd.open{display:block}
+.dd .mi,.dd .it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:6px;text-align:left}
+.dd .mi:hover,.dd .it:hover{background:var(--panel3)}
+.dd .mi svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;color:var(--muted)}
+.dd .k{margin-left:auto;color:var(--muted);font-size:12px}
+.dd hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+/* #menu is the shared File menu */
+#menu{display:none;position:fixed;inset:0;z-index:40}
+#menu.open{display:block}
+#menu .panel{position:absolute;left:96px;top:34px;min-width:300px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.5);padding:6px}
+#menu .brand{display:none}
+#menu .mi{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:6px;text-align:left}
+#menu .mi:hover{background:var(--panel3)}
+#menu .mi svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;color:var(--muted)}
+#menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+/* toolbar */
+#bar{grid-area:bar;display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--line)}
+.ib{flex:none;white-space:nowrap;height:30px;min-width:30px;padding:0 8px;border-radius:6px;display:inline-flex;align-items:center;gap:6px}
+.ib:hover{background:var(--panel3)}
+.ib svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ib.on{background:var(--accent);color:var(--accent-ink)}
+.ib[disabled]{opacity:.35}
+.sep{width:1px;height:22px;background:var(--line);margin:0 6px}
+#zoomSel,#simSpeed{width:auto!important;flex:none;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;height:28px;padding:0 6px}
+#simBox{display:flex;align-items:center;gap:6px;margin-left:auto}
+#simBox input[type=range]{width:220px;accent-color:var(--accent)}
+/* tools */
+#tools{grid-area:tools;display:flex;flex-direction:column;gap:2px;padding:6px 6px;background:var(--panel);border-right:1px solid var(--line)}
+#tools button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 0;border-radius:8px;color:var(--muted);font-size:11px;position:relative}
+#tools button:hover{background:var(--panel3);color:var(--text)}
+#tools button.on{color:var(--accent);background:var(--panel2)}
+#tools button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+#tools button[data-k]::after{content:attr(data-k);position:absolute;right:4px;top:3px;font-size:9px;opacity:.55}
+/* stage */
+#stage{grid-area:stage;position:relative;overflow:hidden;background:#0f1115}
+#rulerT{position:absolute;left:22px;top:0;width:calc(100% - 22px);height:22px;z-index:2}
+#rulerL{position:absolute;left:0;top:22px;width:22px;height:calc(100% - 22px);z-index:2}
+#rulerC{position:absolute;left:0;top:0;width:22px;height:22px;background:#1b1e25;z-index:3}
+canvas#cv{position:absolute;left:22px;top:22px;width:calc(100% - 22px);height:calc(100% - 22px);display:block}
+#hint{position:absolute;left:50%;top:34px;transform:translateX(-50%);background:rgba(20,22,27,.9);border:1px solid var(--line);padding:5px 12px;border-radius:999px;color:var(--muted);pointer-events:none;max-width:80%;text-align:center;z-index:4}
+#hint:empty{display:none}
+#toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:var(--text);color:#111;padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:5;max-width:70%;text-align:center}
+#toast.show{opacity:1}
+#hoopChip{position:absolute;right:10px;top:30px;background:rgba(29,32,39,.94);border:1px solid var(--line);padding:5px 10px;border-radius:999px;font-weight:600;z-index:4}
+#drop{position:absolute;inset:22px 0 0 22px;border:3px dashed var(--accent);background:rgba(242,177,52,.08);display:none;place-items:center;font-size:18px;font-weight:600;z-index:6;pointer-events:none}
+#drop.on{display:grid}
+/* side */
+#side{grid-area:side;display:flex;flex-direction:column;min-height:0;background:var(--panel);border-left:1px solid var(--line)}
+#propsWrap{flex:1 1 60%;min-height:120px;display:flex;flex-direction:column;border-bottom:1px solid var(--line)}
+#sheetBar{flex:none;display:flex;align-items:center;gap:2px;height:32px;padding:0 4px 0 12px;font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+#sheetBar #sheetTitle{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sheetBar .ib{display:none}
+#sheet{flex:1;overflow:auto;min-height:0}
+#sheet:empty::before{content:'Select a layer or a tool to see its settings.';display:block;padding:16px;color:var(--muted)}
+#sheet > .sec:first-child > h3:first-child{display:none}
+#layersWrap{flex:1 1 40%;min-height:120px;display:flex;flex-direction:column}
+#layersHead{flex:none;display:flex;align-items:center;height:32px;padding:0 6px 0 12px;font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+#layersHead span{flex:1}
+#pcLayers{flex:1;overflow:auto;padding:4px}
+.lr{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.lr:hover{background:var(--panel2)}
+.lr.on{background:var(--panel3);border-color:#4a5163}
+.lr.dragover{border-top:2px solid var(--accent)}
+.lr .num{width:18px;color:var(--muted);font-size:11px;text-align:right}
+.lr .dot{width:18px;height:18px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.18)}
+.lr .nm{flex:1;min-width:0}
+.lr .nm b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr .nm small{color:var(--muted)}
+.lr .eye{opacity:.6;padding:3px}
+.lr .eye:hover{opacity:1}
+.lr .eye svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2}
+.lr.hid{opacity:.45}
+/* shared panel content */
+.sec{padding:10px 12px;border-bottom:1px solid var(--line)}
+.sec h3{margin:0 0 8px;font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.row{display:flex;align-items:center;gap:8px;margin:7px 0}
+.row label{flex:0 0 96px;color:var(--muted)}
+.row input[type=range]{flex:1;accent-color:var(--accent)}
+.row .val{flex:0 0 56px;text-align:right;font-variant-numeric:tabular-nums}
+.btns{display:flex;flex-wrap:wrap;gap:6px}
+.btn{padding:6px 11px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);min-height:30px}
+.btn:hover{background:var(--panel3)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:650}
+.btn.danger{color:#ff8a8d}
+.btn.sm{padding:4px 9px;min-height:26px;font-size:12.5px}
+input[type=text],input[type=number],select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 8px;min-height:30px;width:100%}
+.toggle{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.toggle button{padding:5px 10px;min-height:28px}
+.toggle button:hover{background:var(--panel3)}
+.toggle button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.sw{width:24px;height:24px;border-radius:50%;border:2px solid rgba(255,255,255,.18)}
+.sw.on{outline:2px solid var(--accent);outline-offset:2px}
+.swc{position:relative;overflow:hidden}
+.swc input{position:absolute;inset:-6px;opacity:0;width:44px;height:44px;cursor:pointer}
+.layer{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px}
+.layer.on{background:var(--panel2)}
+.layer .dot{width:18px;height:18px;border-radius:50%;flex:none}
+.layer .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.layer .meta{color:var(--muted);font-size:12px}
+.layer .ib{min-width:26px;height:26px;padding:0}
+.small{font-size:12px;color:var(--muted)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+.stats b{font-variant-numeric:tabular-nums}
+/* status */
+#status{grid-area:status;display:flex;align-items:center;gap:18px;padding:0 12px;background:var(--panel);border-top:1px solid var(--line);color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+#status b{color:var(--text);font-weight:600}
+#status .fit-ok{color:var(--ok)} #status .fit-bad{color:#ff8a8d}
+#busy{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;place-items:center;z-index:50;color:#fff;font-weight:600;font-size:15px}
+#busy.on{display:grid}
+/* modal */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;place-items:center;z-index:45}
+#modal.open{display:grid}
+#modal .box{width:min(640px,92vw);max-height:84vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+#modal h2{margin:0 0 10px;font-size:16px}
+#modal table{width:100%;border-collapse:collapse}
+#modal td{padding:4px 6px;border-bottom:1px solid var(--line)}
+#modal kbd{background:var(--panel3);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="menubar">
+    <div class="brand">Stitch<span>Studio</span></div>
+    <button class="mb" id="bMenu">File</button>
+    <button class="mb" data-dd="ddEdit">Edit</button>
+    <button class="mb" data-dd="ddView">View</button>
+    <button class="mb" data-dd="ddDesign">Design</button>
+    <button class="mb" data-dd="ddHelp">Help</button>
+    <div id="title">Untitled</div>
+  </div>
+
+  <div id="bar">
+    <button class="ib" id="bUndo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <button class="ib" id="bRedo" title="Redo (Ctrl+Y)"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+    <div class="sep"></div>
+    <button class="ib" id="pOpen" title="Open project (Ctrl+O)"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg></button>
+    <button class="ib" id="pSave" title="Save project (Ctrl+S)"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button>
+    <button class="ib" id="pVp3" title="Export VP3 (Ctrl+E)"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3h16v-3"/></svg>VP3</button>
+    <button class="ib" id="pDst" title="Export DST"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3h16v-3"/></svg>DST</button>
+    <div class="sep"></div>
+    <button class="ib" id="bFit" title="Fit hoop (Ctrl+0)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <select id="zoomSel" title="Zoom"><option value="">Zoom</option><option value="fit">Fit hoop</option><option value="1">Actual size</option><option value="2">200%</option><option value="4">400%</option><option value="8">800%</option></select>
+    <button class="ib" id="bReal" title="Realistic thread view (R)"><svg viewBox="0 0 24 24"><path d="M7 4h10M7 20h10"/><rect x="8" y="4" width="8" height="16" rx="1"/><path d="M8 8l8 2M8 12l8 2M8 16l8 2" opacity=".75"/></svg>Realistic</button>
+    <button class="ib" id="bPreview" title="Preview & stats (P)"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
+    <div id="simBox">
+      <button class="ib" id="simPlay" title="Play sew-out simulation"><svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>Simulate</button>
+      <select id="simSpeed" title="Simulation speed" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;height:28px"><option value="400">Slow</option><option value="1500" selected>Normal</option><option value="6000">Fast</option><option value="25000">Very fast</option></select>
+      <input type="range" id="simPos" min="0" max="1000" value="1000" title="Sew-out position">
+    </div>
+  </div>
+
+  <nav id="tools">
+    <button data-tool="select" data-k="V" title="Select & transform (V)"><svg viewBox="0 0 24 24"><path d="m5 3 14 8-6 2-3 6z"/></svg>Select</button>
+    <button data-tool="pick" data-k="I" title="Pick colour from picture (I)"><svg viewBox="0 0 24 24"><path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L16 10l-2-2z"/><path d="m14 8-8.5 8.5L5 19l2.5-.5L16 10"/><path d="m12.5 6.5 5 5"/></svg>Pick</button>
+    <button data-tool="brush" data-k="B" title="Stitch brushes (B)"><svg viewBox="0 0 24 24"><path d="M14 4l6 6-8.5 8.5a3 3 0 0 1-2 .9L4 20l.6-5.5a3 3 0 0 1 .9-2z"/><path d="m12 6 6 6" opacity=".6"/></svg>Brush</button>
+    <button data-tool="draw" data-k="D" title="Draw fill / satin / line (D)"><svg viewBox="0 0 24 24"><path d="M4 18 8 5l8 2 4 10z"/><circle cx="8" cy="5" r="1.6"/><circle cx="16" cy="7" r="1.6"/><circle cx="20" cy="17" r="1.6"/><circle cx="4" cy="18" r="1.6"/></svg>Draw</button>
+    <button data-tool="text" data-k="T" title="Lettering (T)"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>Text</button>
+    <button data-tool="auto" data-k="A" title="Auto-digitize (A)"><svg viewBox="0 0 24 24"><path d="m12 3 1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="m18 15 .9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z"/></svg>Auto</button>
+    <button data-tool="layers" data-k="L" title="Sew order (L)"><svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>Order</button>
+  </nav>
+
+  <div id="stage">
+    <canvas id="rulerT"></canvas><canvas id="rulerL"></canvas><div id="rulerC"></div>
+    <canvas id="cv"></canvas>
+    <div id="hint"></div>
+    <button id="hoopChip">Hoop</button>
+    <div id="drop">Drop a picture, VP3 / DST, or project file</div>
+    <div id="toast"></div>
+  </div>
+
+  <aside id="side">
+    <div id="propsWrap">
+      <div id="sheetBar"><span id="sheetTitle">Properties</span><button class="ib" id="sMin"></button><button class="ib" id="sMax"></button></div>
+      <div id="sheet"></div>
+    </div>
+    <div id="layersWrap">
+      <div id="layersHead"><span>Layers · sew order</span>
+        <button class="ib" id="lUp" title="Sew earlier ( [ )"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
+        <button class="ib" id="lDown" title="Sew later ( ] )"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button class="ib" id="lDup" title="Duplicate (Ctrl+D)"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V4h12"/></svg></button>
+        <button class="ib" id="lDel" title="Delete (Del)"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+      </div>
+      <div id="pcLayers"></div>
+    </div>
+  </aside>
+
+  <div id="status">
+    <span>X <b id="stX">–</b> Y <b id="stY">–</b></span>
+    <span>Zoom <b id="stZ">–</b></span>
+    <span>Stitches <b id="stN">0</b></span>
+    <span>Colours <b id="stC">0</b></span>
+    <span>Trims <b id="stT">0</b></span>
+    <span>Size <b id="stS">–</b></span>
+    <span>Sew time <b id="stM">–</b></span>
+    <span id="stFit"></span>
+  </div>
+</div>
+
+<!-- shared File menu (wired by app.js) -->
+<div id="menu"><div class="panel">
+  <div class="brand">Stitch<span>Studio</span></div>
+  <button class="mi" data-act="new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New design<span class="k" style="margin-left:auto;color:var(--muted)">Ctrl+N</span></button>
+  <button class="mi" data-act="open"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>Open project…<span class="k" style="margin-left:auto;color:var(--muted)">Ctrl+O</span></button>
+  <button class="mi" data-act="save"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/></svg>Save project (download)</button>
+  <hr>
+  <button class="mi" data-act="image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></svg>Open picture to trace…</button>
+  <button class="mi" data-act="embfile"><svg viewBox="0 0 24 24"><path d="M12 21V9m0 0-4 4m4-4 4 4"/><path d="M4 7V4h16v3"/></svg>Add VP3 / DST as layer…</button>
+  <button class="mi" data-act="imgsize"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/></svg>Picture size &amp; position</button>
+  <button class="mi" data-act="size"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>Design size &amp; hoop</button>
+  <hr>
+  <button class="mi" data-act="vp3"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3h16v-3"/></svg>Export VP3 (Husqvarna / Pfaff)<span class="k" style="margin-left:auto;color:var(--muted)">Ctrl+E</span></button>
+  <button class="mi" data-act="dst"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3h16v-3"/></svg>Export DST (Tajima)</button>
+  <button class="mi" data-act="help"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>Quick guide</button>
+</div></div>
+
+<div class="dd" id="ddEdit">
+  <button class="it" data-cmd="undo">Undo<span class="k">Ctrl+Z</span></button>
+  <button class="it" data-cmd="redo">Redo<span class="k">Ctrl+Y</span></button>
+  <hr>
+  <button class="it" data-cmd="copy">Copy layer<span class="k">Ctrl+C</span></button>
+  <button class="it" data-cmd="paste">Paste layer / picture<span class="k">Ctrl+V</span></button>
+  <button class="it" data-cmd="dup">Duplicate<span class="k">Ctrl+D</span></button>
+  <button class="it" data-cmd="del">Delete<span class="k">Del</span></button>
+  <hr>
+  <button class="it" data-cmd="earlier">Sew earlier<span class="k">[</span></button>
+  <button class="it" data-cmd="later">Sew later<span class="k">]</span></button>
+  <button class="it" data-cmd="first">Sew first<span class="k">Shift+[</span></button>
+  <button class="it" data-cmd="last">Sew last<span class="k">Shift+]</span></button>
+  <hr>
+  <button class="it" data-cmd="center">Center layer in hoop<span class="k">Ctrl+Shift+C</span></button>
+  <button class="it" data-cmd="centerAll">Center whole design in hoop</button>
+  <button class="it" data-cmd="deselect">Deselect<span class="k">Esc</span></button>
+</div>
+<div class="dd" id="ddView">
+  <button class="it" data-cmd="fit">Fit hoop<span class="k">Ctrl+0</span></button>
+  <button class="it" data-cmd="actual">Actual size<span class="k">Ctrl+1</span></button>
+  <button class="it" data-cmd="zin">Zoom in<span class="k">Ctrl++</span></button>
+  <button class="it" data-cmd="zout">Zoom out<span class="k">Ctrl+−</span></button>
+  <hr>
+  <button class="it" data-cmd="real">Realistic thread view<span class="k">R</span></button>
+  <button class="it" data-cmd="preview">Preview &amp; stats<span class="k">P</span></button>
+  <button class="it" data-cmd="sim">Play sew-out simulation<span class="k">G</span></button>
+  <button class="it" data-cmd="pic">Show / hide picture<span class="k">H</span></button>
+  <hr>
+  <button class="it" data-cmd="fabric">Fabric colour…</button>
+  <button class="it" data-cmd="hoop">Hoop…</button>
+</div>
+<div class="dd" id="ddDesign">
+  <button class="it" data-cmd="png">Export realistic mockup (PNG)…</button>
+  <button class="it" data-cmd="sheet">Production worksheet (print / PDF)…</button>
+  <button class="it" data-cmd="saveas">Save project as… (choose folder)<span class="k">Ctrl+Shift+S</span></button>
+  <hr>
+  <button class="it" data-cmd="threads">Thread list for this design</button>
+</div>
+<div class="dd" id="ddHelp">
+  <button class="it" data-cmd="keys">Keyboard shortcuts<span class="k">?</span></button>
+  <button class="it" data-cmd="guide">Quick guide</button>
+</div>
+
+<div id="modal"><div class="box" id="modalBox"></div></div>
+<div id="busy">Working…</div>
+<input type="file" id="fImage" accept="image/*" hidden>
+<input type="file" id="fEmb" accept=".vp3,.dst,.VP3,.DST" hidden>
+<input type="file" id="fProject" accept=".json,.stitch,application/json" hidden>
+
+<script src="js/stitch.js"></script>
+<script src="js/trace.js"></script>
+<script src="js/render.js"></script>
+<script src="js/app.js"></script>
+<script src="js/pc.js"></script>
+</body>
+</html>
