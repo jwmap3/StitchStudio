@@ -47,8 +47,8 @@
       case 'del': if (o) { d.objects = d.objects.filter(x => x !== o); SS.select(null); SS.commit(); } break;
       case 'earlier': if (o) SS.move(o, -1); break;
       case 'later': if (o) SS.move(o, 1); break;
-      case 'first': if (o) moveTo(o, 0); break;
-      case 'last': if (o) moveTo(o, d.objects.length); break;
+      case 'first': if (o) { moveTo(o, 0); SS.toast('At the bottom — sews first'); } break;
+      case 'last': if (o) { moveTo(o, d.objects.length); SS.toast('On top — sews last'); } break;
       case 'center': centerSel('both'); break;
       case 'centerH': centerSel('h'); break;
       case 'centerV': centerSel('v'); break;
@@ -155,9 +155,10 @@
     const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p);
     if (o) SS.select(o.id);
     ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
+      <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
       <button class="it" data-c="center">Center in hoop</button><hr>
-      <button class="it" data-c="first">Sew first</button><button class="it" data-c="earlier">Sew earlier</button><button class="it" data-c="later">Sew later</button><button class="it" data-c="last">Sew last</button><hr>
+      <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
       <button class="it" data-c="del">Delete<span class="k">Del</span></button>`
       : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>`;
     ctx.style.left = e.clientX + 'px'; ctx.style.top = e.clientY + 'px'; ctx.classList.add('open');

@@ -104,7 +104,7 @@
         // occlusion: dark where the thread enters the fabric and along its sides
         float ao=mix(0.62,1.0,smoothstep(0.0,2.0*hw,e))*(0.84+0.16*nz);
         c*=ao;
-        float aa=clamp((1.0-r)*max(h,1.6)/1.1,0.0,1.0);
+        float aa=clamp((1.0-r)*max(h,1.6)/0.7,0.0,1.0);
         o=vec4(c*aa, aa);
       }`;
       const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -127,7 +127,7 @@
     const { c, gl, u } = G;
     if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
     const s = view.s * dpr, ox = view.x * dpr + m.e * 0, oy = view.y * dpr;
-    const hw = Math.max(1.1, (opt.thread || 0.46) * s / 2);
+    const hw = Math.max(1.1, Math.max(opt.thread || 0.46, 0.54) * s / 2);   // thread flattens on fabric: ~0.54 mm wide
     let budget = opt.limit == null ? Infinity : opt.limit;
     // pack instances (device px), split per colour layer
     let total = 0; layers.forEach(l => l.lines.forEach(ln => total += Math.max(0, ln.length - 1)));
