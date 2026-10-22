@@ -37,6 +37,8 @@
   function centerOf(o) { const b = SS.bbox(o); return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null; }
   function run(cmd) {
     const o = selObj(), d = SS.doc(), h = SS.hoop();
+    if (!o && SS.bgSelected() && (cmd === 'last' || cmd === 'later')) { SS.picTop(true); return; }
+    if (!o && SS.bgSelected() && (cmd === 'first' || cmd === 'earlier')) { SS.picTop(false); return; }
     if (!o && ['dup', 'del', 'earlier', 'later', 'first', 'last'].includes(cmd)) { SS.toast('Select a layer first (click it on the canvas or in Layers)'); return; }
     switch (cmd) {
       case 'undo': SS.undo(); break;
@@ -69,6 +71,8 @@
       case 'saveas': saveProject(true); break;
       case 'threads': threadModal(); break;
       case 'keys': keysModal(); break;
+      case 'picTop': SS.picTop(true); break;
+      case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
       case 'outline': outlineModal(); break;
       case 'guide': document.querySelector('#menu [data-act=help]').click(); break;
@@ -159,8 +163,8 @@
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
       <button class="it" data-c="center">Center in hoop</button><hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
-      <button class="it" data-c="del">Delete<span class="k">Del</span></button>`
-      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>`;
+      <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') : ''}`
+      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;
     ctx.style.left = e.clientX + 'px'; ctx.style.top = e.clientY + 'px'; ctx.classList.add('open');
     ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
   });
@@ -219,10 +223,10 @@
   let layerSig = '', dragFrom = null;
   function renderLayers() {
     const d = SS.doc(), sid = SS.selId();
-    const sig = JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid;
+    const sig = JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
     if (sig === layerSig) return; layerSig = sig;
     const box = $('#pcLayers');
-    if (!d.objects.length) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
+    if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
     box.innerHTML = d.objects.map((o, i) => {
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
       return `<div class="lr ${o.id === sid ? 'on' : ''} ${o.hidden ? 'hid' : ''}" draggable="true" data-id="${o.id}">
@@ -230,7 +234,16 @@
         <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
     }).join('');
-    box.querySelectorAll('.lr').forEach(el => {
+    if (d.bg) {
+      const row = `<div class="lr ${SS.bgSelected() ? 'on' : ''} ${d.bgHidden ? 'hid' : ''}" data-pic="1"><span class="num">–</span><span class="dot" style="background:#666;border-radius:4px"></span>
+        <span class="nm"><b>Picture (not stitched)</b><small>${d.bgOnTop ? 'on top · see-through' : 'underneath'}</small></span>
+        <button class="eye" data-pt="1" title="${d.bgOnTop ? 'Send to bottom' : 'Bring to top'}"><svg viewBox="0 0 24 24">${d.bgOnTop ? '<path d="m6 9 6 6 6-6"/>' : '<path d="m6 15 6-6 6 6"/>'}</svg></button>
+        <button class="eye" data-pe="1" title="Show / hide"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div>`;
+      box.innerHTML = d.bgOnTop ? box.innerHTML + row : row + box.innerHTML;
+      const pr = box.querySelector('[data-pic]');
+      pr.addEventListener('click', e => { if (e.target.closest('[data-pt]')) { SS.picTop(); return; } if (e.target.closest('[data-pe]')) { SS.toggleBg(); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.selectPic(); });
+    }
+    box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.select(o.id); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });

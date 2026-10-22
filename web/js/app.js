@@ -264,14 +264,17 @@
     }
     ctx.strokeStyle = '#5b6372'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
     ctx.strokeRect(hx, hy, h.w * view.s, h.h * view.s); ctx.setLineDash([]);
-    // background image
-    if (bgImg && doc.bg && !preview && !doc.bgHidden) {
+    // background picture: under the stitches, or on top (see-through) when bgOnTop
+    const drawPic = () => {
+      if (!(bgImg && doc.bg && !preview && !doc.bgHidden)) return;
       ctx.globalAlpha = doc.bgOpacity;
       const b = doc.bg, [x, y] = toPX([b.x, b.y]);
       ctx.drawImage(bgImg, x, y, b.w * view.s, b.h * view.s);
       ctx.globalAlpha = 1;
-    }
+    };
+    if (!doc.bgOnTop) drawPic();
     if (preview) drawPreview(); else drawDesign();
+    if (doc.bgOnTop) { drawPic(); if (!sceneNoHandles) { const o = sel(); if (o) { drawHandles(o); drawXformHandle(o); } drawBgSel(); } }
     drawDraft();
   }
 
@@ -675,7 +678,7 @@
     if (preview) return;
     if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
     if (tool === 'select' || tool === 'layers' || tool === 'auto') {
-      const o = hitObject(p);
+      const o = doc.bgOnTop && doc.bg && !doc.bgHidden && p[0] >= doc.bg.x && p[0] <= doc.bg.x + doc.bg.w && p[1] >= doc.bg.y && p[1] <= doc.bg.y + doc.bg.h ? null : hitObject(p);
       if (!o && tool === 'select' && doc.bg && !doc.bgHidden && p[0] >= doc.bg.x && p[0] <= doc.bg.x + doc.bg.w && p[1] >= doc.bg.y && p[1] <= doc.bg.y + doc.bg.h) { selId = null; bgSel = true; renderSheet(); draw(); return; }
       bgSel = false;
       selId = o ? o.id : null; selNode = -1;
@@ -1222,11 +1225,12 @@
       <div class="row"><label>Height</label><input type="number" id="iH" step="0.05" min="0.2" value="${inch(b.h)}"><span class="val">in</span></div>
       <p class="small" style="margin:0 0 6px">Proportions stay locked. Hoop: ${inch(hoop().w)} × ${inch(hoop().h)} in.</p>`,
       slider('Image fade', 'iO', 0, 1, 0.05, doc.bgOpacity, '', v => { doc.bgOpacity = v; draw(); }),
-      `<div class="btns" style="margin-top:8px">${btn('iFit', 'Fit to hoop')}${btn('iCen', 'Center')}<button class="btn ${imgMove ? 'primary' : ''}" id="iMove">${imgMove ? 'Moving image — tap to stop' : 'Move image'}</button>${btn('iDone', 'Done')}</div></div>`];
+      `<div class="btns" style="margin-top:8px">${btn('iTop', doc.bgOnTop ? '⬇ Send picture to bottom' : '⬆ Bring picture to top', 'primary')}${btn('iFit', 'Fit to hoop')}${btn('iCen', 'Center')}<button class="btn ${imgMove ? 'primary' : ''}" id="iMove">${imgMove ? 'Moving image — tap to stop' : 'Move image'}</button>${btn('iDone', 'Done')}</div></div>`];
     mount(parts);
     const setW = (wmm) => { const ar = b.h / b.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2; b.w = wmm; b.h = wmm * ar; b.x = cx - b.w / 2; b.y = cy - b.h / 2; doc.width = b.w; autosave(); draw(); };
     $('#iW').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN); $('#iH').value = inch(b.h); } });
     $('#iH').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN * b.w / b.h); $('#iW').value = inch(b.w); } });
+    on('iTop', () => { doc.bgOnTop = !doc.bgOnTop; autosave(); renderImageSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); });
     on('iFit', () => { const h = hoop(), ar = b.h / b.w; let w = h.w * 0.94, hh = w * ar; if (hh > h.h * 0.94) { hh = h.h * 0.94; w = hh / ar; } b.w = w; b.h = hh; b.x = (h.w - w) / 2; b.y = (h.h - hh) / 2; autosave(); renderImageSheet(); draw(); });
     on('iCen', () => { const h = hoop(); b.x = (h.w - b.w) / 2; b.y = (h.h - b.h) / 2; autosave(); draw(); });
     on('iMove', () => { imgMove = !imgMove; renderImageSheet(); });
@@ -1524,7 +1528,7 @@
         <button class="ib" data-a="down" aria-label="Sew later"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <button class="ib" data-a="eye" aria-label="Show or hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.5-1"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     });
-    if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · always underneath</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
+    if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · ${doc.bgOnTop ? 'on top (see-through)' : 'underneath'}</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     parts.push('</div>');
     mount(parts);
     const bgRow = sheet.querySelector('[data-bg]');
@@ -1740,6 +1744,8 @@
     zoomTo(s) { const r = cv.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, mm = toMM(cx, cy); view.s = s; view.x = cx - mm[0] * s; view.y = cy - mm[1] * s; draw(); },
     pan(dx, dy) { view.x += dx; view.y += dy; draw(); },
     Render, Stitch: S, hitObject, IN, threadName,
+    selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
+    picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
     alignPick, alignCancel() { if (alignA) { alignA = null; selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
