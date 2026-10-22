@@ -9,6 +9,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Draw → Fill**: choose a thread colour and trace around any part of the picture with your finger (or tap points); it fills with dense satin, then swipe for direction.
 - **Brush**: stitch brushes. Satin, line (single or triple), fill paint, eraser, and **flow** (draw how the thread should run across a fill).
 - **Draw → Satin**: centre-line with width, or **point–counterpoint** (tap alternating edges). **Draw → Line**: running or triple (bean) stitch.
+- **Hoops (Designer Topaz 30)**: tap the hoop button on the canvas. Splendid Square 120×120 and Royal 360×200 (included), Crown 260×200, Jewel 240×150, metal 180×130, 100×100, or a custom size up to the machine's 360×200 mm field; landscape/portrait; fit warnings.
 - **Inches**: inch grid and rulers, image and design size set in inches (menu).
 - **Text**: lettering with arch, satin-look or fill.
 - **Auto**: one-tap auto-digitize into colour layers.

@@ -7,12 +7,16 @@
   const sheet = $('#sheet');
 
   // ---------------- state
+  // Hoops for the Husqvarna Viking DESIGNER TOPAZ 30 (max stitch field 360 × 200 mm)
+  const MAXF = { w: 360, h: 200 };
   const HOOPS = [
-    { name: '4 × 4 in (100 × 100 mm)', w: 100, h: 100 },
-    { name: '4.7 × 4.7 in — Splendid Square (120 mm)', w: 120, h: 120 },
-    { name: '5 × 7 in (130 × 180 mm)', w: 130, h: 180 },
-    { name: '10.2 × 7.9 in — Crown (260 × 200 mm)', w: 260, h: 200 },
-    { name: '14.2 × 7.9 in — Royal (360 × 200 mm)', w: 360, h: 200 },
+    { id: 'splendid', name: 'Splendid Square', w: 120, h: 120, tag: 'Included with Topaz 30' },
+    { id: 'royal', name: 'Royal', w: 360, h: 200, tag: 'Included with Topaz 30' },
+    { id: 'crown', name: 'Crown', w: 260, h: 200, tag: 'Optional' },
+    { id: 'jewel', name: 'Jewel', w: 240, h: 150, tag: 'Optional' },
+    { id: 'metal180', name: 'Metal hoop', w: 180, h: 130, tag: 'Optional' },
+    { id: 'small100', name: 'Small square', w: 100, h: 100, tag: 'Optional (4 × 4 in)' },
+    { id: 'custom', name: 'Custom size', w: 150, h: 150, tag: 'Up to 360 × 200 mm' },
   ];
   const THREADS = ['#000000', '#ffffff', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#e35205', '#8a5a2b', '#5c3a1e', '#1f3a93', '#0b2a5b', '#2e7d32', '#6abf4b', '#7a7a7a', '#c0c0c0', '#f4a6c1', '#6a2c91', '#00a3ad'];
   let doc = newDoc();
@@ -35,9 +39,22 @@
   let bgImg = null;
 
   function newDoc() {
-    return { name: 'Untitled', hoop: 1, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3 };
+    return { name: 'Untitled', hoopId: 'splendid', hoopRot: false, customHoop: { w: 150, h: 150 }, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3 };
   }
-  const hoop = () => HOOPS[doc.hoop] || HOOPS[1];
+  const hoopDef = () => HOOPS.find(h => h.id === doc.hoopId) || HOOPS[0];
+  const hoop = () => {
+    const d = hoopDef(); let w = d.w, h = d.h;
+    if (d.id === 'custom') { w = Math.min(MAXF.w, Math.max(20, (doc.customHoop || {}).w || 150)); h = Math.min(MAXF.w, Math.max(20, (doc.customHoop || {}).h || 150)); if (Math.min(w, h) > MAXF.h) { if (w < h) w = MAXF.h; else h = MAXF.h; } }
+    return doc.hoopRot ? { name: d.name, w: h, h: w } : { name: d.name, w, h };
+  };
+  // does the design (bounds in mm) fit the chosen hoop? (either way round, since the machine can rotate designs)
+  function fitInfo(d) {
+    const h = hoop(); if (!d.count) return null;
+    const w = d.bounds[2] - d.bounds[0], hh = d.bounds[3] - d.bounds[1];
+    const fits = (w <= h.w + 0.01 && hh <= h.h + 0.01), fitsRot = (hh <= h.w + 0.01 && w <= h.h + 0.01);
+    const machine = (w <= MAXF.w && hh <= MAXF.h) || (hh <= MAXF.w && w <= MAXF.h);
+    return { fits, fitsRot, machine, w, h: hh };
+  }
   const sel = () => doc.objects.find(o => o.id === selId) || null;
 
   // ---------------- persistence + undo
@@ -57,6 +74,7 @@
   }
   function loadSaved() {
     try { const s = localStorage.getItem('ss_doc'); if (s) { doc = Object.assign(newDoc(), JSON.parse(s)); } } catch (e) {}
+    if (typeof doc.hoop === 'number' && !doc.hoopIdSet) { doc.hoopId = ['small100', 'splendid', 'metal180', 'crown', 'royal'][doc.hoop] || 'splendid'; delete doc.hoop; }
     lastSnap = snapshot();
     if (doc.bg) loadBg(doc.bg.src, false);
   }
@@ -749,6 +767,9 @@
   function exportFile(kind) {
     const d = design();
     if (!d.count) { toast('Nothing to export yet'); return; }
+    const fi = fitInfo(d);
+    if (fi && !fi.machine && !confirm('This design is bigger than the Topaz 30 can stitch (14.17 × 7.87 in). Export anyway?')) return;
+    if (fi && fi.machine && !fi.fits && !fi.fitsRot) toast('Heads up: the design is bigger than the ' + hoopDef().name + ' hoop');
     const bytes = kind === 'vp3' ? S.writeVP3(d) : S.writeDST(d, doc.name);
     saveBytes(safeName() + '.' + kind, bytes, 'application/octet-stream');
   }
@@ -1033,22 +1054,47 @@
     const mins = Math.round(d.count / 600 + d.trims * 0.1 + d.colors.length * 0.5);
     const parts = ['<div class="sec"><h3>Realistic preview</h3>',
       slider('Sew-out', 'pp', 0, 100, 1, Math.round(progress * 100), '%', v => { progress = v / 100; draw(); }),
-      `<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
+      `${(() => { const fi = fitInfo(d); return fi ? `<p class="small" style="margin:0 0 8px;color:${fi.fits || fi.fitsRot ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Fits the ' + hoopDef().name + ' hoop' : fi.fitsRot ? '⟳ Fits the ' + hoopDef().name + ' hoop if rotated' : fi.machine ? '✗ Too big for the ' + hoopDef().name + ' hoop — pick a bigger hoop' : '✗ Bigger than the Topaz 30 can stitch (14.17 × 7.87 in)'}</p>` : ''; })()}<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
       `<div class="swatches" style="margin-top:10px">${d.colors.map((c, i) => `<span class="sw" title="${i + 1}" style="background:${c.color}"></span>`).join('')}</div>`,
       `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}</div></div>`];
     mount(parts);
     on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst'));
   }
 
+  function renderHoopSheet() {
+    hint('');
+    const cur = hoopDef();
+    const parts = ['<div class="sec"><h3>Hoop · Designer Topaz 30</h3>'];
+    HOOPS.forEach(h => {
+      const on = h.id === cur.id;
+      const dims = h.id === 'custom' ? `${inch((doc.customHoop || {}).w || 150)} × ${inch((doc.customHoop || {}).h || 150)} in` : `${inch(h.w)} × ${inch(h.h)} in · ${h.w} × ${h.h} mm`;
+      parts.push(`<div class="layer ${on ? 'on' : ''}" data-hoop="${h.id}" style="cursor:pointer"><span class="dot" style="border-radius:6px;background:${on ? 'var(--accent)' : 'transparent'}"></span><span class="nm"><b>${h.name}</b> — ${dims}<br><span class="meta">${h.tag}</span></span></div>`);
+    });
+    if (cur.id === 'custom') parts.push(`<div class="row"><label>Width</label><input type="number" id="cW" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).w || 150)}"><span class="val">in</span></div><div class="row"><label>Height</label><input type="number" id="cH" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).h || 150)}"><span class="val">in</span></div><p class="small" style="margin:0">The Topaz 30 can stitch up to 14.17 × 7.87 in (360 × 200 mm).</p>`);
+    parts.push(`<div class="row"><label>Orientation</label><div class="toggle" id="hRot"><button data-v="0" class="${!doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Landscape' : 'Normal'}</button><button data-v="1" class="${doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Portrait' : 'Rotated'}</button></div></div>`);
+    const fi = fitInfo(design());
+    if (fi) parts.push(`<p class="small" style="margin:6px 0 0;color:${fi.fits ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) fits this hoop.' : (fi.fitsRot ? '⟳ Fits if you rotate the hoop.' : '✗ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) is bigger than this hoop.')}</p>`);
+    parts.push(`<div class="btns" style="margin-top:10px">${btn('hDone', 'Done', 'primary')}${btn('hMore', 'Resize design…')}</div></div>`);
+    mount(parts);
+    sheet.querySelectorAll('[data-hoop]').forEach(el => el.addEventListener('click', () => { doc.hoopId = el.dataset.hoop; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
+    $('#hRot').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.hoopRot = b2.dataset.v === '1'; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
+    const cw = $('#cW'), ch = $('#cH');
+    const setC = () => { doc.customHoop = { w: Math.min(MAXF.w, parseFloat(cw.value) * IN || 150), h: Math.min(MAXF.w, parseFloat(ch.value) * IN || 150) }; autosave(); updateHoopChip(); fit(); };
+    if (cw) { cw.addEventListener('change', setC); ch.addEventListener('change', setC); }
+    on('hDone', () => renderSheet());
+    on('hMore', () => renderSizeSheet());
+  }
+  function updateHoopChip() { const h = hoop(), c = $('#hoopChip'); if (c) c.textContent = `${hoopDef().name} · ${inch(h.w)} × ${inch(h.h)} in ▾`; }
+
   function renderSizeSheet() {
-    const parts = ['<div class="sec"><h3>Hoop</h3>', `<div class="row"><select id="hSel">${HOOPS.map((h, i) => `<option value="${i}" ${i === doc.hoop ? 'selected' : ''}>${h.name}</option>`).join('')}</select></div>`,
+    const parts = ['<div class="sec"><h3>Design</h3>', `<div class="row"><label>Hoop</label><button class="btn" id="hPick" style="flex:1;text-align:left">${hoopDef().name} · ${inch(hoop().w)} × ${inch(hoop().h)} in</button></div>`,
       `<div class="row"><label>Design name</label><input type="text" id="hName" value="${esc(doc.name)}"></div>`,
       '<h3 style="margin-top:14px">Resize whole design</h3>',
       `<div class="row"><label>Width</label><input type="number" id="hWin" step="0.05" min="0.2" value="${(() => { const d = design(); return d.count ? inch(d.bounds[2] - d.bounds[0]) : ''; })()}"><span class="val">in</span></div>`,
       slider('Scale', 'hs', 25, 300, 1, 100, '%', () => {}),
       `<div class="btns">${btn('hApply', 'Apply scale', 'primary')}${btn('hClose', 'Close')}</div></div>`];
     mount(parts);
-    $('#hSel').addEventListener('change', e => { doc.hoop = +e.target.value; autosave(); fit(); });
+    on('hPick', () => renderHoopSheet());
     $('#hName').addEventListener('change', e => { doc.name = e.target.value || 'Untitled'; $('#title').textContent = doc.name; autosave(); });
     on('hApply', () => {
       let k = +$('#r_hs').value / 100;
@@ -1116,7 +1162,7 @@
     if (a === 'new') {
       if (doc.objects.length && !confirm('Start a new design? Unsaved changes will be lost.')) return;
       doc = newDoc(); bgImg = null; cache.clear(); selId = null; draft = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot();
-      autosave(); updateUndo(); $('#title').textContent = doc.name; fit(); renderSheet();
+      autosave(); updateUndo(); $('#title').textContent = doc.name; updateHoopChip(); fit(); renderSheet();
     }
   });
   $('#fImage').addEventListener('change', e => {
@@ -1134,17 +1180,20 @@
         doc = Object.assign(newDoc(), d); delete doc.app; delete doc.v;
         cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo();
         bgImg = null; if (doc.bg) loadBg(doc.bg.src, false);
-        $('#title').textContent = doc.name; autosave(); fit(); renderSheet(); toast('Project opened');
+        if (typeof doc.hoop === 'number') { doc.hoopId = ['small100', 'splendid', 'metal180', 'crown', 'royal'][doc.hoop] || 'splendid'; delete doc.hoop; }
+        $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); toast('Project opened');
       } catch (err) { toast('That file is not a Stitch Studio project'); }
     };
     r.readAsText(f); e.target.value = '';
   });
+  $('#hoopChip').addEventListener('click', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderHoopSheet(); });
   window.addEventListener('resize', resize);
   if (window.ResizeObserver) new ResizeObserver(() => resize()).observe($('#stage'));
 
   // ---------------- start
   loadSaved();
   $('#title').textContent = doc.name;
+  updateHoopChip();
   updateUndo();
   setTool('select');
   requestAnimationFrame(() => { resize(); fit(); });
