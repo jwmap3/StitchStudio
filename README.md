@@ -34,6 +34,8 @@ Same engine as the phone app, with a desktop interface (`web/pc.html` + `web/js/
 - Layers: drag to reorder, double-click to rename, show/hide, sew first/last.
 - Keyboard shortcuts (press `?` in the app), arrow-key nudging, right-click layer menu, space/middle-mouse pan, actual-size zoom.
 - Drag & drop pictures, VP3/DST and projects; paste screenshots straight from the clipboard; copy/paste layers.
+- **Patch maker** (M): around-the-design or circle / oval / rounded / rectangle / shield; stitched background, twill appliqué (placement line → stop → tack-down → stop → trim) or none; thick satin edge up to a 6 mm merrow look, sewn last.
+- **Outline / offset** (O): run, bean or satin outline at a set distance around the whole design or one layer.
 - Sew-out simulation with speed control; realistic PNG mockup export; printable production worksheet (thread sequence, stitch counts, size, hoop, time); Save / Save As to a folder you choose.
 
 ## Layout

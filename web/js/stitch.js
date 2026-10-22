@@ -460,7 +460,7 @@
       const pieces = S.objectPieces(o);
       if (!pieces.length) continue;
       const col = (o.color || '#000000').toLowerCase();
-      if (curColor !== col) {
+      if (curColor !== col || o.stopBefore) {   // stopBefore: machine pauses (applique fabric placement)
         if (curColor !== null) { trim(); st.push({ x: pos ? pos[0] : 0, y: pos ? pos[1] : 0, c: COLOR }); }
         curColor = col; colors.push({ color: col, name: o.threadName || '' });
       }
