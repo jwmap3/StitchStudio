@@ -466,7 +466,7 @@
   }
   function tracedFill(loops, name) {
     const satin = pick.style === 'satin';
-    addObject({ type: 'fill', name, paths: loops, angle: 0, spacing: pick.density, stitchLen: satin ? 7 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: currentColor });
+    addObject({ type: 'fill', name, paths: loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: currentColor });
     setTool('pick', true);
     hint('Now swipe across it the way the thread should run');
   }
@@ -606,7 +606,7 @@
       busy(false);
       if (!r) return;
       const satin = pick.style === 'satin';
-      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + r.col, paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 7 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: r.col });
+      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + r.col, paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: r.col });
       hint('Now swipe across the shape the way the thread should run');
     }, 20);
   }
@@ -846,7 +846,7 @@
     mount(parts);
     const tg = (id, fn) => $('#' + id).querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); }));
     tg('pkScope', v => pick.scope = v);
-    tg('pkStyle', v => { pick.style = v; if (step2) { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 7 : 3.5; commit(); draw(); } });
+    tg('pkStyle', v => { pick.style = v; if (step2) { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; commit(); draw(); } });
     $('#dPre').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.density = +b2.dataset.v; if (step2) { o.spacing = pick.density; commit(); draw(); } renderSheet(); }));
     on('pkNext', () => { selId = null; renderSheet(); draw(); });
     on('pkStraight', () => { delete o.flow; commit(); renderSheet(); draw(); });
@@ -969,7 +969,7 @@
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
-    tog('tLook', v => { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 7 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
+    tog('tLook', v => { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
     const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { o.spacing = +b2.dataset.v; commit(); renderSheet(); draw(); }));
     const tt = $('#tText'); if (tt) { tt.addEventListener('input', () => { o.text = tt.value; layoutText(o); draw(); }); tt.addEventListener('change', () => commit()); }
     const tf = $('#tFont'); if (tf) tf.addEventListener('change', () => { o.font = +tf.value; layoutText(o); commit(); draw(); });

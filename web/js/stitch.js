@@ -379,7 +379,7 @@
       // glyphs are pre-traced fill shapes (see app text tool); each sewn as satin-look fill
       const pieces = [];
       o.glyphs.forEach(g => {
-        const go = { paths: g.paths, angle: g.angle, spacing: o.spacing || 0.38, stitchLen: o.style === 'fill' ? 3.0 : 7.0, pullComp: o.pullComp == null ? 0.12 : o.pullComp, underlay: false };
+        const go = { paths: g.paths, angle: g.angle, spacing: o.spacing || 0.38, stitchLen: o.style === 'fill' ? 3.0 : 12.0, pullComp: o.pullComp == null ? 0.12 : o.pullComp, underlay: false };
         const top = tatami(go.paths, go);
         // edge-run underlay so letters stay crisp
         if (o.underlay !== false) g.paths.forEach(l => { if (l.length > 2) pieces.push({ pts: resamplePolyline(l, 1.2, true), kind: 'underlay', glyph: g }); });
@@ -423,7 +423,7 @@
       }
       const d = hyp(pos, p);
       if (d < 0.05) return;
-      const n = Math.ceil(d / 7.0);   // never leave a stitch longer than 7 mm
+      const n = Math.ceil(d / 10.0);  // never leave a stitch longer than 10 mm
       for (let i = 1; i <= n; i++) st.push({ x: pos[0] + (p[0] - pos[0]) * i / n, y: pos[1] + (p[1] - pos[1]) * i / n, c: STITCH });
       pos = p;
     };

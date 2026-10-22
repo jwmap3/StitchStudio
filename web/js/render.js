@@ -5,7 +5,7 @@
 (function (root) {
   'use strict';
   const R = {};
-  const BUCKETS = 18;                       // angle buckets over 180°
+  const BUCKETS = 18, VAR = [0.9, 1.0, 1.09];   // 3 brightness variants per direction                       // angle buckets over 180°
   const LIGHT = -0.95;                      // light from upper-left (radians)
 
   function rgb(hex) { const n = parseInt(String(hex).replace('#', ''), 16) || 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
@@ -15,59 +15,74 @@
   function mix(c, t, a) { return c.map((v, i) => v + (t[i] - v) * a); }
 
   // per bucket shading: threads lying across the light are brighter (sheen)
-  function shades(base) {
-    const L = lum(base), out = [];
-    for (let b = 0; b < BUCKETS; b++) {
-      const ang = (b + 0.5) / BUCKETS * Math.PI;           // 0..PI
-      const s = Math.abs(Math.sin(ang - LIGHT));             // 1 = perpendicular to light
-      const f = 0.78 + 0.34 * s;
-      const body = scale(base, f);
-      const edge = scale(base, 0.52 + 0.1 * s);
-      const hiA = (L < 0.12 ? 0.10 : L > 0.85 ? 0.55 : 0.32) * (0.35 + 0.65 * s);
-      const hi = mix(body, [255, 255, 255], 0.55);
-      out.push({ body: css(body), edge: css(edge), hi: css(hi, hiA) });
+  function shades(base0) {
+    const out = [];
+    for (let v = 0; v < VAR.length; v++) for (let b = 0; b < BUCKETS; b++) {
+      const base = scale(base0, VAR[v]), L = lum(base);
+      const ang = (b + 0.5) / BUCKETS * Math.PI;
+      const s = Math.abs(Math.sin(ang - LIGHT));              // 1 = stitch lies across the light
+      const f = 0.74 + 0.36 * s;
+      const hiA = (L < 0.12 ? 0.14 : L > 0.85 ? 0.6 : 0.42) * (0.3 + 0.7 * s);
+      out.push({
+        edge: css(scale(base, 0.42 + 0.08 * s)),               // where the thread dives into the fabric
+        body: css(scale(base, f * 0.86)),                      // thread body
+        mid: css(mix(scale(base, f), [255, 245, 225], 0.06 + 0.10 * s)),   // rounded crown
+        ply: css(scale(base, 0.62 + 0.1 * s), 0.55),           // twist grooves
+        hi: css(mix(scale(base, f), [255, 250, 235], 0.6), hiA) // specular glint
+      });
     }
     return out;
   }
+
+  // shorten a segment symmetrically by fraction t of its length at each end
+  function inset(p, x0, y0, x1, y1, t) { const dx = (x1 - x0) * t, dy = (y1 - y0) * t; p.moveTo(x0 + dx, y0 + dy); p.lineTo(x1 - dx, y1 - dy); }
 
   /* layers: [{color:'#rrggbb', lines:[[[x,y],...], ...]}] in sewing order (mm)
      view: {s, x, y} px per mm + offset ; opt: {thread(mm), limit(stitches)} */
   R.draw = function (ctx, layers, view, opt) {
     opt = opt || {};
     const w = Math.max(0.7, (opt.thread || 0.42) * view.s);
-    const sh = Math.max(0.5, 0.07 * view.s);
+    const sh = Math.max(0.5, 0.08 * view.s);
     let budget = opt.limit == null ? Infinity : opt.limit;
     ctx.save();
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.lineJoin = 'round';
     const X = p => p[0] * view.s + view.x, Y = p => p[1] * view.s + view.y;
     for (const layer of layers) {
       if (budget <= 0) break;
       const sd = shades(rgb(layer.color));
-      let paths, shadow, used = 0;
-      const reset = () => { paths = []; for (let b = 0; b < BUCKETS; b++) paths.push(new Path2D()); shadow = new Path2D(); used = 0; };
-      // draw in sewing order: flush every few hundred stitches so later stitches sit on top of earlier ones
+      let P, used = 0;
+      const NB = BUCKETS * VAR.length; const mk = () => { const a = []; for (let b = 0; b < NB; b++) a.push(new Path2D()); return a; };
+      const reset = () => { P = { full: mk(), body: mk(), mid: mk(), hi: mk(), shadow: new Path2D() }; used = 0; };
       const flush = () => {
         if (!used) return;
-        ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = w * 1.1; ctx.stroke(shadow);
-        for (let b = 0; b < BUCKETS; b++) { ctx.strokeStyle = sd[b].edge; ctx.lineWidth = w; ctx.stroke(paths[b]); }
-        for (let b = 0; b < BUCKETS; b++) { ctx.strokeStyle = sd[b].body; ctx.lineWidth = w * 0.7; ctx.stroke(paths[b]); }
-        if (w > 1.6) for (let b = 0; b < BUCKETS; b++) { ctx.strokeStyle = sd[b].hi; ctx.lineWidth = Math.max(0.6, w * 0.22); ctx.stroke(paths[b]); }
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = w * 1.15; ctx.stroke(P.shadow);
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].edge; ctx.lineWidth = w; ctx.stroke(P.full[b]); }
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].body; ctx.lineWidth = w * 0.72; ctx.stroke(P.body[b]); }
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].mid; ctx.lineWidth = w * 0.5; ctx.stroke(P.mid[b]); }
+        if (w > 1.4) for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].hi; ctx.lineWidth = Math.max(0.6, w * 0.2); ctx.stroke(P.hi[b]); }
         reset();
       };
       reset();
       for (const ln of layer.lines) {
         if (budget <= 0) break;
-        if (used > 600) flush();
+        if (used > 500) flush();
         for (let i = 1; i < ln.length; i++) {
           if (budget-- <= 0) break;
           const a = ln[i - 1], c = ln[i];
           const x0 = X(a), y0 = Y(a), x1 = X(c), y1 = Y(c);
-          const dx = x1 - x0, dy = y1 - y0;
-          if (dx * dx + dy * dy < 0.04) continue;
+          const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
+          if (L2 < 0.04) continue;
           let ang = Math.atan2(dy, dx); if (ang < 0) ang += Math.PI; if (ang >= Math.PI) ang -= Math.PI;
-          const b = Math.min(BUCKETS - 1, Math.floor(ang / Math.PI * BUCKETS));
-          paths[b].moveTo(x0, y0); paths[b].lineTo(x1, y1);
-          shadow.moveTo(x0 + sh, y0 + sh * 1.3); shadow.lineTo(x1 + sh, y1 + sh * 1.3);
+          let h = ((i * 2654435761) ^ (ln.length * 40503)) >>> 0; const b = (h % 3) * BUCKETS + Math.min(BUCKETS - 1, Math.floor(ang / Math.PI * BUCKETS));
+          const len = Math.sqrt(L2), e = Math.min(0.35, w * 0.55 / len);   // end darkening scales with thread width
+          P.full[b].moveTo(x0, y0); P.full[b].lineTo(x1, y1);
+          inset(P.body[b], x0, y0, x1, y1, e * 0.5);
+          inset(P.mid[b], x0, y0, x1, y1, Math.min(0.4, e * 1.2 + 0.08));
+          // glint sits slightly towards the light, on the crown of the thread
+          const ox = -w * 0.12, oy = -w * 0.16;
+          inset(P.hi[b], x0 + ox, y0 + oy, x1 + ox, y1 + oy, Math.min(0.42, e * 1.6 + 0.16));
+          P.shadow.moveTo(x0 + sh, y0 + sh * 1.3); P.shadow.lineTo(x1 + sh, y1 + sh * 1.3);
           used++;
         }
       }
