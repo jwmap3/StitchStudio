@@ -481,6 +481,38 @@
     }
     return null;
   }
+  // straighten: every point between point kA and point kB (same outline) moves onto the line A→B, keeping its spacing
+  let alignA = null;   // { id, k }
+  function alignPick(p) {
+    const o = sel();
+    if (!o || !['fill', 'satin', 'run'].includes(o.type)) { toast('Select a fill, satin or line first'); return false; }
+    const k = hitNode(o, p);
+    if (k < 0) { toast('Middle-click right on a point'); return false; }
+    if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); toast('Point A set — middle-click the second point'); return true; }
+    const A = nodeAt(o, alignA.k), B = nodeAt(o, k);
+    if (A.li !== B.li) { toast('Both points must be on the same outline'); alignA = null; selNode = -1; draw(); return true; }
+    const arr = o.type === 'fill' ? o.paths[A.li] : o.points, n = arr.length, closed = o.type === 'fill';
+    let i0 = A.pi, i1 = B.pi;
+    // which points are "in between": for open lines the run between them; for closed shapes the shorter way round
+    let idx = [];
+    if (!closed) { const lo = Math.min(i0, i1), hi = Math.max(i0, i1); for (let i = lo + 1; i < hi; i++) idx.push(i); if (i0 > i1) [i0, i1] = [i1, i0]; }
+    else {
+      // the side whose path is shorter (the edge you're looking at), not just fewer points
+      const plen = (s0, s1) => { let L = 0; for (let i = s0; i !== s1; i = (i + 1) % n) { const j = (i + 1) % n; L += Math.hypot(arr[j][0] - arr[i][0], arr[j][1] - arr[i][1]); } return L; };
+      if (plen(i0, i1) > plen(i1, i0)) [i0, i1] = [i1, i0];
+      for (let i = (i0 + 1) % n; i !== i1; i = (i + 1) % n) idx.push(i);
+    }
+    if (!idx.length) { toast('No points between those two'); alignA = null; selNode = -1; draw(); return true; }
+    const P = arr[i0], Q = arr[i1];
+    // keep the points' relative spacing along the path
+    const chain = [i0].concat(idx, [i1]); let cum = [0];
+    for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(arr[chain[j]][0] - arr[chain[j - 1]][0], arr[chain[j]][1] - arr[chain[j - 1]][1]));
+    const tot = cum[cum.length - 1] || 1;
+    idx.forEach((i, j) => { const t = cum[j + 1] / tot; arr[i][0] = P[0] + (Q[0] - P[0]) * t; arr[i][1] = P[1] + (Q[1] - P[1]) * t; });
+    alignA = null; selNode = k; commit(); renderSheet(); draw();
+    toast(`Lined up ${idx.length} point${idx.length > 1 ? 's' : ''}`);
+    return true;
+  }
   function hitNode(o, p) {
     const tol = 16 / view.s; let best = -1, bd = tol;
     shapeNodes(o).forEach(n => { const d = Math.hypot(n.p[0] - p[0], n.p[1] - p[1]); if (d < bd) { bd = d; best = o.type === 'text' ? 0 : flatIndex(o, n); } });
@@ -1689,6 +1721,7 @@
     zoomTo(s) { const r = cv.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, mm = toMM(cx, cy); view.s = s; view.x = cx - mm[0] * s; view.y = cy - mm[1] * s; draw(); },
     pan(dx, dy) { view.x += dx; view.y += dy; draw(); },
     Render, Stitch: S, hitObject, IN, threadName,
+    alignPick, alignCancel() { if (alignA) { alignA = null; selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };

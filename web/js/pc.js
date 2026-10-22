@@ -111,7 +111,7 @@
     if (c && (k === '-' || k === '_')) { e.preventDefault(); run('zout'); return; }
     if (c) return;
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); run('del'); return; }
-    if (k === 'Escape') { run('deselect'); return; }
+    if (k === 'Escape') { if (SS.alignCancel) SS.alignCancel(); run('deselect'); return; }
     if (k === '[') { run(e.shiftKey ? 'first' : 'earlier'); return; }
     if (k === ']') { run(e.shiftKey ? 'last' : 'later'); return; }
     if (k === '{') { run('first'); return; }
@@ -134,11 +134,18 @@
   const stage = $('#stage'); let panning = null;
   stage.addEventListener('pointerdown', e => {
     if (e.button === 1 || (e.button === 0 && spaceDown)) {
-      e.preventDefault(); e.stopPropagation(); panning = { x: e.clientX, y: e.clientY }; stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing';
+      e.preventDefault(); e.stopPropagation(); panning = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, mid: e.button === 1 }; stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing';
     }
   }, true);
   stage.addEventListener('pointermove', e => { if (panning) { e.stopPropagation(); SS.pan(e.clientX - panning.x, e.clientY - panning.y); panning = { x: e.clientX, y: e.clientY }; } }, true);
-  stage.addEventListener('pointerup', e => { if (panning) { e.stopPropagation(); panning = null; stage.style.cursor = ''; } }, true);
+  stage.addEventListener('pointerup', e => {
+    if (!panning) return;
+    e.stopPropagation();
+    const click = panning.mid && Math.hypot(e.clientX - panning.sx, e.clientY - panning.sy) < 5;
+    panning = null; stage.style.cursor = '';
+    // middle-click (no drag) in Select on a point: line up points (A, then B)
+    if (click && SS.tool() === 'select') { const r = SS.cv.getBoundingClientRect(); SS.alignPick(SS.toMM(e.clientX - r.left, e.clientY - r.top)); }
+  }, true);
   stage.addEventListener('auxclick', e => e.preventDefault());
 
   // ---------------- right-click context menu
@@ -365,7 +372,7 @@
   function modal(html) { $('#modalBox').innerHTML = html + '<div class="btns" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="mClose">Close</button></div>'; $('#modal').classList.add('open'); $('#mClose').onclick = () => $('#modal').classList.remove('open'); }
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') $('#modal').classList.remove('open'); });
   function keysModal() {
-    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle mouse', 'Pan'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
+    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
     modal('<h2>Keyboard shortcuts</h2><table>' + K.map(([k, v]) => `<tr><td style="white-space:nowrap"><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>');
   }
   function threadModal() {
