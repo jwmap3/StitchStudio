@@ -14,7 +14,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Text**: lettering with arch, satin-look or fill.
 - **Auto**: one-tap auto-digitize into colour layers.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.
-- **Preview**: realistic thread render with sew-out slider, stitch count, trims, colours, time.
+- **Realistic thread view** while you edit (sheen by stitch direction, shadows, fabric texture; toggle in the header) and **Preview** with sew-out slider, fabric colours, stitch count, trims, colours, time.
 
 Files are saved to `Downloads/StitchStudio`.
 

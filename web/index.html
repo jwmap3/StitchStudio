@@ -85,6 +85,7 @@ nav button.on{color:var(--accent)}
     <button class="ib" id="bUndo" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
     <button class="ib" id="bRedo" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
     <button class="ib" id="bFit" aria-label="Fit to screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button class="ib" id="bReal" aria-label="Realistic thread view"><svg viewBox="0 0 24 24"><path d="M7 4h10M7 20h10"/><rect x="8" y="4" width="8" height="16" rx="1"/><path d="M8 8l8 2M8 12l8 2M8 16l8 2" opacity=".75"/></svg></button>
     <button class="ib" id="bPreview" aria-label="Realistic preview"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </header>
   <div id="stage"><canvas id="cv"></canvas><div id="hint"></div><button id="hoopChip">Hoop</button><div id="toast"></div></div>
@@ -121,6 +122,7 @@ nav button.on{color:var(--accent)}
 
 <script src="js/stitch.js"></script>
 <script src="js/trace.js"></script>
+<script src="js/render.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -39,7 +39,7 @@
   let bgImg = null;
 
   function newDoc() {
-    return { name: 'Untitled', hoopId: 'splendid', hoopRot: false, customHoop: { w: 150, h: 150 }, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3 };
+    return { name: 'Untitled', hoopId: 'splendid', hoopRot: false, customHoop: { w: 150, h: 150 }, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3, realistic: true, fabric: '#e9e7e1' };
   }
   const hoopDef = () => HOOPS.find(h => h.id === doc.hoopId) || HOOPS[0];
   const hoop = () => {
@@ -130,19 +130,21 @@
     const h = hoop();
     // hoop / fabric
     const [hx, hy] = toPX([0, 0]);
-    ctx.fillStyle = preview ? '#e9e7e1' : '#1b1e25';
+    const real = preview || doc.realistic !== false;
+    ctx.fillStyle = real ? Render.fabric(ctx, doc.fabric || '#e9e7e1') : '#1b1e25';
     ctx.fillRect(hx, hy, h.w * view.s, h.h * view.s);
+    const lightFab = real && parseInt((doc.fabric || '#e9e7e1').slice(1), 16) > 0x808080;
     if (!preview) {
       // inch grid: quarter inches faint, whole inches stronger, numbered along the top and left
       const q = IN / 4, showQ = q * view.s > 9;
       ctx.lineWidth = 1;
       for (let pass = 0; pass < 2; pass++) {
-        ctx.strokeStyle = pass ? '#3a4150' : '#242934'; ctx.beginPath();
+        ctx.strokeStyle = real ? (lightFab ? (pass ? 'rgba(0,0,0,.16)' : 'rgba(0,0,0,.06)') : (pass ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.06)')) : (pass ? '#3a4150' : '#242934'); ctx.beginPath();
         for (let x = q, k = 1; x < h.w; x += q, k++) { if ((k % 4 === 0) !== !!pass || (!pass && !showQ)) continue; const [a] = toPX([x, 0]); ctx.moveTo(a, hy); ctx.lineTo(a, hy + h.h * view.s); }
         for (let y = q, k = 1; y < h.h; y += q, k++) { if ((k % 4 === 0) !== !!pass || (!pass && !showQ)) continue; const [, b] = toPX([0, y]); ctx.moveTo(hx, b); ctx.lineTo(hx + h.w * view.s, b); }
         ctx.stroke();
       }
-      ctx.fillStyle = '#7b8494'; ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = real && lightFab ? 'rgba(0,0,0,.45)' : '#7b8494'; ctx.font = '11px system-ui, sans-serif';
       for (let k = 1; k * IN < h.w; k++) { const [a] = toPX([k * IN, 0]); ctx.fillText(k + '"', a + 3, hy + 12); }
       for (let k = 1; k * IN < h.h; k++) { const [, b] = toPX([0, k * IN]); ctx.fillText(k + '"', hx + 3, b - 3); }
     }
@@ -160,6 +162,18 @@
   }
 
   function drawDesign() {
+    if (doc.realistic !== false) {
+      const layers = [];
+      for (const o of doc.objects) {
+        if (o.hidden) continue;
+        const lines = pieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts);
+        if (lines.length) layers.push({ color: o.color, lines });
+      }
+      Render.draw(ctx, layers, view, { thread: 0.42 });
+      const o = sel();
+      if (o) drawHandles(o);
+      return;
+    }
     const lw = Math.max(0.6, Math.min(1.6, view.s * 0.12));
     for (const o of doc.objects) {
       if (o.hidden) continue;
@@ -261,27 +275,17 @@
   function drawPreview() {
     if (!previewCache) previewCache = design();
     const d = previewCache;
-    const st = d.stitches;
-    let limit = Math.round(d.count * progress), n = 0;
-    const tw = Math.max(1, 0.45 * view.s);
-    let ci = 0, prev = null, col = d.colors[0] ? d.colors[0].color : '#000';
-    ctx.lineCap = 'round';
-    for (const s of st) {
-      if (s.c === 3) { ci++; col = d.colors[ci] ? d.colors[ci].color : col; prev = null; continue; }
-      if (s.c === 0) {
-        if (n >= limit) break;
-        n++;
-        if (prev) {
-          const [x0, y0] = toPX(prev), [x1, y1] = toPX([s.x, s.y]);
-          const ang = Math.atan2(y1 - y0, x1 - x0), f = 0.8 + 0.22 * Math.abs(Math.cos(ang + 0.96));
-          ctx.strokeStyle = shade(col, 0.7 * f); ctx.lineWidth = tw; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-          ctx.strokeStyle = shade(col, f); ctx.lineWidth = tw * 0.72; ctx.stroke();
-          if (tw > 2.5) { ctx.strokeStyle = shade(col, f, parseInt(col.slice(1), 16) > 0x404040 ? 0.28 : 0.12); ctx.lineWidth = tw * 0.22; ctx.stroke(); }
-        }
-        prev = [s.x, s.y];
-      } else prev = [s.x, s.y];
+    const layers = []; let ci = 0, cur = null, line = null;
+    const newLayer = () => { cur = { color: d.colors[ci] ? d.colors[ci].color : '#000000', lines: [] }; layers.push(cur); line = null; };
+    newLayer();
+    for (const s2 of d.stitches) {
+      if (s2.c === 3) { ci++; newLayer(); continue; }
+      if (s2.c === 0) { if (!line) { line = []; cur.lines.push(line); } line.push([s2.x, s2.y]); }
+      else { line = [[s2.x, s2.y]]; cur.lines.push(line); }
     }
+    Render.draw(ctx, layers, view, { thread: 0.42, limit: Math.round(d.count * progress) });
   }
+
 
   // ---------------- hit testing
   function pointInLoops(p, loops) {
@@ -1048,6 +1052,7 @@
     });
   }
 
+  const FABRICS = [['#f4f3ef', 'White'], ['#e9e7e1', 'Natural'], ['#1a1a1c', 'Black'], ['#1c2541', 'Navy'], ['#2648a8', 'Royal blue'], ['#8e1b1b', 'Red'], ['#7d8086', 'Gray'], ['#c8b48a', 'Khaki'], ['#2f4f2f', 'Forest']];
   function renderPreviewSheet() {
     const d = previewCache || (previewCache = design());
     const b = d.bounds, wmm = b[2] - b[0], hmm = b[3] - b[1];
@@ -1056,9 +1061,11 @@
       slider('Sew-out', 'pp', 0, 100, 1, Math.round(progress * 100), '%', v => { progress = v / 100; draw(); }),
       `${(() => { const fi = fitInfo(d); return fi ? `<p class="small" style="margin:0 0 8px;color:${fi.fits || fi.fitsRot ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Fits the ' + hoopDef().name + ' hoop' : fi.fitsRot ? '⟳ Fits the ' + hoopDef().name + ' hoop if rotated' : fi.machine ? '✗ Too big for the ' + hoopDef().name + ' hoop — pick a bigger hoop' : '✗ Bigger than the Topaz 30 can stitch (14.17 × 7.87 in)'}</p>` : ''; })()}<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
       `<div class="swatches" style="margin-top:10px">${d.colors.map((c, i) => `<span class="sw" title="${i + 1}" style="background:${c.color}"></span>`).join('')}</div>`,
+      `<h3 style="margin-top:14px">Fabric</h3><div class="swatches" id="fabSw">${FABRICS.map(([c, n]) => `<button class="sw ${c === (doc.fabric || '#e9e7e1') ? 'on' : ''}" data-f="${c}" style="background:${c}" aria-label="${n}" title="${n}"></button>`).join('')}</div>`,
       `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}</div></div>`];
     mount(parts);
     on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst'));
+    sheet.querySelectorAll('[data-f]').forEach(b2 => b2.addEventListener('click', () => { doc.fabric = b2.dataset.f; autosave(); renderSheet(); draw(); }));
   }
 
   function renderHoopSheet() {
@@ -1135,6 +1142,8 @@
   $('#bUndo').addEventListener('click', undo);
   $('#bRedo').addEventListener('click', redo);
   $('#bFit').addEventListener('click', fit);
+  const setRealBtn = () => $('#bReal').classList.toggle('on', doc.realistic !== false);
+  $('#bReal').addEventListener('click', () => { doc.realistic = doc.realistic === false; setRealBtn(); autosave(); draw(); toast(doc.realistic ? 'Realistic thread view' : 'Simple line view (faster)'); });
   $('#bPreview').addEventListener('click', () => {
     preview = !preview; previewCache = null; progress = 1; draft = null;
     $('#bPreview').classList.toggle('on', preview);
@@ -1194,8 +1203,9 @@
   loadSaved();
   $('#title').textContent = doc.name;
   updateHoopChip();
+  setRealBtn();
   updateUndo();
   setTool('select');
   requestAnimationFrame(() => { resize(); fit(); });
-  window.__ss = { toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
+  window.__ss = { drawNow, zoom: (x, y, f) => { const r = cv.getBoundingClientRect(); view.s *= f; view.x = r.width / 2 - x * view.s; view.y = r.height / 2 - y * view.s; draw(); }, toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
 })();

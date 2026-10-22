@@ -177,6 +177,7 @@
       return false;
     };
     const mark = (pts, line) => pts.forEach(p => { const [i, j] = gi(p[0], p[1]); const k = i + ',' + j; if (!occ.has(k)) occ.set(k, []); occ.get(k).push([p[0], p[1], line]); });
+    let pass2 = false;
     const trace = (seed, line) => {
       const half = dirSign => {
         const out = []; let p = seed.slice(); let prev = null;
@@ -187,7 +188,7 @@
           const mid = [p[0] + d[0] * step / 2, p[1] + d[1] * step / 2];
           let d2 = field(mid[0], mid[1]); if (d2[0] * d[0] + d2[1] * d[1] < 0) d2 = [-d2[0], -d2[1]];
           const q = [p[0] + d2[0] * step, p[1] + d2[1] * step];
-          if (!isIn(q[0], q[1]) || near(q[0], q[1], line, sp * 0.55)) break;
+          if (!isIn(q[0], q[1]) || near(q[0], q[1], line, sp * (pass2 ? 0.45 : 0.55))) break;
           out.push(q); prev = d2; p = q;
         }
         return out;
@@ -202,11 +203,13 @@
     let gridIdx = 0;
     const gridSeeds = [];
     for (let j = 0; j < gh; j += 2) for (let i = 0; i < gw; i += 2) if (inside[j * gw + i]) gridSeeds.push([minx + (i - 1) * cell, miny + (j - 1) * cell]);
-    while (lines.length < 3000) {
+    let seedGap = 0.9;
+    while (lines.length < 4000) {
       let seed = queue.shift();
-      if (!seed) { while (gridIdx < gridSeeds.length) { const s = gridSeeds[gridIdx++]; if (!near(s[0], s[1], -1, sp * 0.9)) { seed = s; break; } } }
+      if (!seed) { while (gridIdx < gridSeeds.length) { const s = gridSeeds[gridIdx++]; if (!near(s[0], s[1], -1, sp * seedGap)) { seed = s; break; } } }
+      if (!seed && !pass2) { pass2 = true; seedGap = 0.6; gridIdx = 0; continue; }   // second sweep fills pinch gaps
       if (!seed) break;
-      if (!isIn(seed[0], seed[1]) || near(seed[0], seed[1], -1, sp * 0.9)) continue;
+      if (!isIn(seed[0], seed[1]) || near(seed[0], seed[1], -1, sp * seedGap)) continue;
       const pts = trace(seed, lines.length);
       if (pts.length < 3) { mark([seed], lines.length); continue; }
       mark(pts, lines.length);
