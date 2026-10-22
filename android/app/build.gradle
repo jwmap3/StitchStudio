@@ -1,0 +1,37 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.jwmap3.stitchstudio'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.jwmap3.stitchstudio'
+        minSdk 24
+        targetSdk 34
+        versionCode((System.getenv('BUILD_NUMBER') ?: '1') as int)
+        versionName "1.0." + (System.getenv('BUILD_NUMBER') ?: '1')
+    }
+
+    signingConfigs {
+        // fixed key so new builds install over old ones without uninstalling
+        stitch {
+            storeFile file('stitchstudio.keystore')
+            storePassword 'stitchstudio'
+            keyAlias 'stitchstudio'
+            keyPassword 'stitchstudio'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.stitch
+        }
+        debug { signingConfig signingConfigs.stitch }
+    }
+    // the editor itself (HTML/JS) lives in /web and is packaged as the app's assets
+    sourceSets { main { assets.srcDirs = ['../../web'] } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
