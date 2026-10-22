@@ -42,6 +42,7 @@
   let fillMode = 'points';       // 'points' | 'quick' (Quick Draw)
   let quickTol = 40;
   let stroke = null;             // live brush stroke
+  let autoPickSrc = false;      // Auto: next tap on the picture adds its colour to the palette
   let drawKind = 'fill';         // Draw tool: fill | satin | run
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
   const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null };   // Pick tool
@@ -677,6 +678,17 @@
   function onTap(p) {
     if (preview) return;
     if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
+    if (tool === 'auto' && autoPickSrc) {
+      autoPickSrc = false; hint('');
+      const b = doc.bg; if (!b || !bgImg) return;
+      const c2 = document.createElement('canvas'); c2.width = c2.height = 1; const g = c2.getContext('2d');
+      const ix = (p[0] - b.x) / b.w * bgImg.naturalWidth, iy = (p[1] - b.y) / b.h * bgImg.naturalHeight;
+      if (ix < 0 || iy < 0 || ix >= bgImg.naturalWidth || iy >= bgImg.naturalHeight) { toast('Tap inside the picture'); renderSheet(); return; }
+      g.drawImage(bgImg, ix - 2, iy - 2, 5, 5, 0, 0, 1, 1); const d = g.getImageData(0, 0, 1, 1).data;
+      const st = renderAutoSheet.st; st.palette = st.palette || [];
+      st.palette.push({ src: [d[0], d[1], d[2]], thread: nearestThread(hex3([d[0], d[1], d[2]]))[0], n: 0 }); st.sel = st.palette.length - 1;
+      toast('Colour added — pick its thread'); renderSheet(); return;
+    }
     if (tool === 'select' || tool === 'layers' || tool === 'auto') {
       const o = doc.bgOnTop && doc.bg && !doc.bgHidden && p[0] >= doc.bg.x && p[0] <= doc.bg.x + doc.bg.w && p[1] >= doc.bg.y && p[1] <= doc.bg.y + doc.bg.h ? null : hitObject(p);
       if (!o && tool === 'select' && doc.bg && !doc.bgHidden && p[0] >= doc.bg.x && p[0] <= doc.bg.x + doc.bg.w && p[1] >= doc.bg.y && p[1] <= doc.bg.y + doc.bg.h) { selId = null; bgSel = true; renderSheet(); draw(); return; }
@@ -958,42 +970,57 @@
   }
 
   // ---------------- auto-digitize
+  function sampleImage(opts) {
+    const b = doc.bg;
+    const maxPx = { normal: 700, high: 1000, max: 1400 }[opts.quality || 'normal'];
+    const sc = Math.min(1, maxPx / Math.max(bgImg.naturalWidth, bgImg.naturalHeight));
+    const w = Math.max(8, Math.round(bgImg.naturalWidth * sc)), h = Math.max(8, Math.round(bgImg.naturalHeight * sc));
+    const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
+    const g = c2.getContext('2d'); g.drawImage(bgImg, 0, 0, w, h);
+    const px = g.getImageData(0, 0, w, h).data;
+    const n = w * h;
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) mask[i] = px[i * 4 + 3] >= 128 ? 1 : 0;
+    if (opts.dropBg) {
+      const corners = [0, w - 1, (h - 1) * w, n - 1].filter(i => mask[i]);
+      if (corners.length) {
+        const ref = corners.map(i => [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]);
+        const near = i => ref.some(r => Math.abs(px[i * 4] - r[0]) + Math.abs(px[i * 4 + 1] - r[1]) + Math.abs(px[i * 4 + 2] - r[2]) < 60);
+        const st = [];
+        for (let x = 0; x < w; x++) { st.push(x, (h - 1) * w + x); }
+        for (let y = 0; y < h; y++) { st.push(y * w, y * w + w - 1); }
+        const seen = new Uint8Array(n);
+        while (st.length) {
+          const i = st.pop(); if (seen[i]) continue; seen[i] = 1;
+          if (!mask[i] || !near(i)) continue;
+          mask[i] = 0;
+          const x = i % w, y = (i - x) / w;
+          if (x > 0) st.push(i - 1); if (x < w - 1) st.push(i + 1); if (y > 0) st.push(i - w); if (y < h - 1) st.push(i + w);
+        }
+      }
+    }
+    return { b, w, h, px, n, mask };
+  }
+  const hex3 = c => '#' + c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+  const rgb3 = hx => { const v = parseInt(hx.slice(1), 16); return [v >> 16 & 255, v >> 8 & 255, v & 255]; };
+  // detect the picture's colours and suggest a thread for each
+  function detectPalette(st) {
+    if (!bgImg || !doc.bg) { toast('Open a picture first'); return; }
+    const { px, n, mask } = sampleImage(Object.assign({}, st, { quality: 'normal' }));
+    const C = T.kmeans(px, n, st.colors, mask);
+    const L = T.assign(px, n, C, mask), cnt = C.map(() => 0); for (let i = 0; i < n; i++) if (L[i] >= 0) cnt[L[i]]++;
+    st.palette = C.map((c, k) => ({ src: c, thread: nearestThread(hex3(c))[0], n: cnt[k] })).filter(e => e.n > 0).sort((a, b2) => b2.n - a.n);
+    st.sel = 0;
+  }
   function autoDigitize(opts) {
     if (!bgImg || !doc.bg) { toast('Open an image first (menu → Open image)'); return; }
     busy(true);
     setTimeout(() => {
       try {
-        const b = doc.bg;
-        const maxPx = { normal: 700, high: 1000, max: 1400 }[opts.quality || 'normal'];
-        const sc = Math.min(1, maxPx / Math.max(bgImg.naturalWidth, bgImg.naturalHeight));
-        const w = Math.max(8, Math.round(bgImg.naturalWidth * sc)), h = Math.max(8, Math.round(bgImg.naturalHeight * sc));
-        const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
-        const g = c2.getContext('2d'); g.drawImage(bgImg, 0, 0, w, h);
-        const px = g.getImageData(0, 0, w, h).data;
-        const n = w * h;
-        const mask = new Uint8Array(n);
-        for (let i = 0; i < n; i++) mask[i] = px[i * 4 + 3] >= 128 ? 1 : 0;
-        if (opts.dropBg) {
-          // flood-fill from the border through pixels similar to the corner colours
-          const corners = [0, w - 1, (h - 1) * w, n - 1].filter(i => mask[i]);
-          if (corners.length) {
-            const ref = corners.map(i => [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]]);
-            const near = i => ref.some(r => Math.abs(px[i * 4] - r[0]) + Math.abs(px[i * 4 + 1] - r[1]) + Math.abs(px[i * 4 + 2] - r[2]) < 60);
-            const st = [];
-            for (let x = 0; x < w; x++) { st.push(x, (h - 1) * w + x); }
-            for (let y = 0; y < h; y++) { st.push(y * w, y * w + w - 1); }
-            const seen = new Uint8Array(n);
-            while (st.length) {
-              const i = st.pop(); if (seen[i]) continue; seen[i] = 1;
-              if (!mask[i] || !near(i)) continue;
-              mask[i] = 0;
-              const x = i % w, y = (i - x) / w;
-              if (x > 0) st.push(i - 1); if (x < w - 1) st.push(i + 1); if (y > 0) st.push(i - w); if (y < h - 1) st.push(i + w);
-            }
-          }
-        }
+        const { b, w, h, px, n, mask } = sampleImage(opts);
         const K = opts.colors;
-        let C = T.kmeans(px, n, K, mask);
+        const pal = opts.mode === 'choose' && opts.palette && opts.palette.length ? opts.palette : null;
+        let C = pal ? pal.map(e => e.src.slice()) : T.kmeans(px, n, K, mask);
         let L = T.assign(px, n, C, mask);
         L = T.majority(L, w, h, C.length); L = T.majority(L, w, h, C.length);
         const mmPerPx = b.w / w;
@@ -1012,12 +1039,13 @@
         const groups = [];
         order.forEach(k => {
           let col = colOf(k), nm = null;
-          if (opts.snap !== false) { const t = nearestThread(col); col = t[0]; nm = t[1]; }
+          if (pal) { if (pal[k].skip) return; col = pal[k].thread; nm = threadName(col); if (nm === col) nm = null; }
+          else if (opts.snap !== false) { const t = nearestThread(col); col = t[0]; nm = t[1]; }
           let g2 = groups.find(x => x.col === col);
           if (!g2) { g2 = { col, nm: nm || ('Auto colour ' + (groups.length + 1)), ks: [] }; groups.push(g2); }
           g2.ks.push(k);
         });
-        const grank = new Int16Array(C.length); groups.forEach((g2, r) => g2.ks.forEach(k => grank[k] = r));
+        const grank = new Int16Array(C.length).fill(-1); groups.forEach((g2, r) => g2.ks.forEach(k => grank[k] = r));
         // chamfer distance transform (half-width of a shape, in px)
         const dist = M => { const D = new Float32Array(n); for (let i = 0; i < n; i++) D[i] = M[i] ? 1e9 : 0;
           for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x) v = Math.min(v, D[i - 1] + 1); if (y) v = Math.min(v, D[i - w] + 1); if (x && y) v = Math.min(v, D[i - w - 1] + 1.414); if (y && x < w - 1) v = Math.min(v, D[i - w + 1] + 1.414); D[i] = v; }
@@ -1484,14 +1512,26 @@
       `<div class="row"><label>Image size</label><span style="flex:1">${doc.bg ? inch(doc.bg.w) + ' × ' + inch(doc.bg.h) + ' in' : '—'}</span><button class="btn sm" id="aSize">Set inches</button></div>`,
       `<div class="btns" style="margin:6px 0 2px">${btn('aGo', 'Auto-digitize', 'primary')}${btn('aImg', 'Open image')}</div></div>`,
       '<div class="sec"><h3>Colours</h3>',
-      slider('Thread colours', 'ac', 2, 24, 1, st.colors, '', v => st.colors = v),
-      tg('aSnap', 'Match to', st.snap ? 1 : 0, [[1, 'Thread chart'], [0, 'Exact image']]),
-      tg('aBg', 'Background', st.dropBg ? 1 : 0, [[1, 'Remove'], [0, 'Keep']]),
-      '</div><div class="sec"><h3>Stitch look</h3>',
+      tg('aMode', 'Colours', st.mode || 'auto', [['auto', 'Automatic'], ['choose', 'I choose']]),
+      slider('Thread colours', 'ac', 2, 24, 1, st.colors, '', v => st.colors = v)];
+    if ((st.mode || 'auto') === 'auto') parts.push(tg('aSnap', 'Match to', st.snap ? 1 : 0, [[1, 'Thread chart'], [0, 'Exact image']]));
+    else {
+      const P = st.palette || [], k = Math.min(st.sel || 0, P.length - 1);
+      parts.push(`<div class="btns" style="margin:6px 0">${btn('aDetect', P.length ? '↻ Detect again' : 'Detect colours from picture', P.length ? '' : 'primary')}${btn('aAddPick', autoPickSrc ? 'Tap the picture…' : '+ Add from picture', autoPickSrc ? 'primary' : '')}</div>`);
+      if (P.length) {
+        parts.push('<p class="small" style="margin:4px 0">Picture colour → thread it becomes. Tap a row, then pick its thread below.</p>');
+        P.forEach((e, i) => parts.push(`<div class="layer ${i === k ? 'on' : ''}" data-pi="${i}" style="cursor:pointer;${e.skip ? 'opacity:.45' : ''}"><span class="dot" style="background:${hex3(e.src)};border-radius:6px"></span><span>→</span><span class="dot" style="background:${e.skip ? 'transparent' : e.thread};${e.skip ? 'border-style:dashed' : ''}"></span><span class="nm">${e.skip ? 'Skip (not stitched)' : esc(threadName(e.thread))}</span>
+          <button class="btn sm" data-ps="${i}">${e.skip ? 'Stitch' : 'Skip'}</button><button class="btn sm danger" data-pr="${i}" title="Remove — its area joins the closest colour">✕</button></div>`));
+        if (P[k] && !P[k].skip) parts.push(colorPicker(P[k].thread, c => { P[k].thread = c; renderSheet(); }));
+      } else parts.push('<p class="small" style="margin:4px 0">Tap <b>Detect colours</b> to start from the picture\'s colours, then swap any of them for the threads you want.</p>');
+    }
+    parts.push(
+      tg('aBg', 'Background', st.dropBg ? 1 : 0, [[1, 'Remove'], [0, 'Keep']]));
+    parts.push('</div><div class="sec"><h3>Stitch look</h3>',
       tg('aStyle', 'Style', st.style, [['mixed', 'Mixed'], ['satin', 'Satin shine'], ['tatami', 'Tatami']]),
       '<p class="small" style="margin:0 0 4px">Mixed = satin shine on narrow parts and lettering, tatami on big areas (how pros do it).</p>',
       tg('aDen', 'Density', st.density, [[0.4, 'Standard'], [0.32, 'Dense'], [0.25, 'Extra'], [0.18, 'Max']]),
-      tg('aDir', 'Direction', st.dir, [['shape', 'Follow shape'], ['fixed', 'One angle'], ['varied', 'Varied']])];
+      tg('aDir', 'Direction', st.dir, [['shape', 'Follow shape'], ['fixed', 'One angle'], ['varied', 'Varied']]));
     if (st.dir === 'fixed') parts.push(slider('Angle', 'aAng', -90, 90, 1, st.angle, '°', v => st.angle = v));
     parts.push(tg('aUnder', 'Underlay', st.underlay ? 1 : 0, [[1, 'On'], [0, 'Off']]),
       slider('Pull comp', 'aPull', 0, 0.5, 0.01, st.pull, ' mm', v => st.pull = v),
@@ -1508,7 +1548,17 @@
       `<div class="btns" style="margin-top:10px">${btn('aGo2', 'Auto-digitize', 'primary')}</div></div>`);
     mount(parts);
     const bindT = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); })); };
-    bindT('aSnap', v => st.snap = v === '1'); bindT('aBg', v => st.dropBg = v === '1'); bindT('aStyle', v => st.style = v);
+    bindT('aMode', v => { st.mode = v; if (v === 'choose' && !(st.palette && st.palette.length) && bgImg) detectPalette(st); });
+    bindT('aSnap', v => st.snap = v === '1');
+    on('aDetect', () => { busy(true); setTimeout(() => { detectPalette(st); busy(false); renderSheet(); }, 20); });
+    on('aAddPick', () => { autoPickSrc = !autoPickSrc; hint(autoPickSrc ? 'Tap a colour in the picture to add it' : ''); renderSheet(); });
+    sheet.querySelectorAll('[data-pi]').forEach(el => el.addEventListener('click', e => {
+      const i = +el.dataset.pi;
+      if (e.target.closest('[data-ps]')) { st.palette[i].skip = !st.palette[i].skip; }
+      else if (e.target.closest('[data-pr]')) { st.palette.splice(i, 1); st.sel = Math.max(0, Math.min(st.sel, st.palette.length - 1)); }
+      else st.sel = i;
+      renderSheet();
+    })); bindT('aBg', v => st.dropBg = v === '1'); bindT('aStyle', v => st.style = v);
     bindT('aDen', v => st.density = +v); bindT('aDir', v => st.dir = v); bindT('aUnder', v => st.underlay = v === '1');
     bindT('aOut', v => st.outline = v); bindT('aQ', v => st.quality = v); bindT('aRep', v => st.replace = v === '1');
     on('aGo', () => autoDigitize(st)); on('aGo2', () => autoDigitize(st));
