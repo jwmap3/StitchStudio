@@ -32,6 +32,15 @@ canvas#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
 #toast.show{opacity:1}
 #sheet{flex:none;background:var(--panel);border-top:1px solid var(--line);max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}
 #sheet:empty{display:none}
+#sheetBar{flex:none;display:none;align-items:center;gap:2px;height:38px;padding:0 4px 0 14px;background:var(--panel);border-top:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+#sheetBar.show{display:flex}
+#sheetBar #sheetTitle{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sheetBar .ib{width:38px;height:34px}
+#sheetBar + #sheet{border-top:0}
+#sheet > .sec:first-child > h3:first-child{display:none}
+#app.sheet-min #sheet{display:none}
+#app.sheet-max #sheet{max-height:78vh}
+#app.sheet-max #sMax svg,#app.sheet-min #sMin svg{opacity:.35}
 .sec{padding:10px 12px;border-bottom:1px solid var(--line)}
 .sec h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .row{display:flex;align-items:center;gap:10px;margin:8px 0}
@@ -89,6 +98,7 @@ nav button.on{color:var(--accent)}
     <button class="ib" id="bPreview" aria-label="Realistic preview"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </header>
   <div id="stage"><canvas id="cv"></canvas><div id="hint"></div><button id="hoopChip">Hoop</button><div id="toast"></div></div>
+  <div id="sheetBar"><span id="sheetTitle">Tools</span><button class="ib" id="sMin" aria-label="Minimize panel"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button><button class="ib" id="sMax" aria-label="Maximize panel"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button></div>
   <div id="sheet"></div>
   <nav id="tools">
     <button data-tool="select"><svg viewBox="0 0 24 24"><path d="m5 3 14 8-6 2-3 6z"/></svg>Select</button>
@@ -104,6 +114,7 @@ nav button.on{color:var(--accent)}
 <div id="menu"><div class="panel">
   <div class="brand">Stitch<span>Studio</span></div>
   <button class="mi" data-act="image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></svg>Open image to trace</button>
+  <button class="mi" data-act="embfile"><svg viewBox="0 0 24 24"><path d="M12 21V9m0 0-4 4m4-4 4 4"/><path d="M4 7V4h16v3"/></svg>Add VP3 / DST file as layers</button>
   <button class="mi" data-act="imgsize"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 2 2 3-4 3 5"/></svg>Image size (inches) &amp; position</button>
   <button class="mi" data-act="size"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M9 4v16" opacity=".5"/></svg>Design size &amp; hoop (inches)</button>
   <hr>
@@ -118,6 +129,7 @@ nav button.on{color:var(--accent)}
 </div></div>
 <div id="busy">Working…</div>
 <input type="file" id="fImage" accept="image/*" hidden>
+<input type="file" id="fEmb" accept=".vp3,.dst,.VP3,.DST,application/octet-stream" hidden>
 <input type="file" id="fProject" accept=".json,.stitch,application/json" hidden>
 
 <script src="js/stitch.js"></script>

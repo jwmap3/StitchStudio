@@ -80,8 +80,16 @@
   }
 
   // ---------------- view
+  let lastSize = null;
   function resize() {
     const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    // keep what was in the middle of the screen in the middle when the panel opens/closes
+    if (lastSize && (lastSize[0] !== r.width || lastSize[1] !== r.height)) {
+      view.x += (r.width - lastSize[0]) / 2; view.y += (r.height - lastSize[1]) / 2;
+      const h = hoop(), hw = h.w * view.s, hh = h.h * view.s;
+      if (hw < r.width && hh < r.height && (view.x > r.width || view.x + hw < 0 || view.y > r.height || view.y + hh < 0)) { lastSize = [r.width, r.height]; fit(); }
+    }
+    lastSize = [r.width, r.height];
     cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     draw();
@@ -195,6 +203,7 @@
     if (o.type === 'fill') return o.paths.flatMap((l, li) => l.map((p, pi) => ({ p, li, pi })));
     if (o.type === 'satin' || o.type === 'run') return o.points.map((p, pi) => ({ p, li: 0, pi }));
     if (o.type === 'text') return [{ p: [o.x, o.y], li: 0, pi: 0 }];
+    if (o.type === 'stitches') return [];
     return [];
   }
   function drawHandles(o) {
@@ -219,7 +228,7 @@
         o.points.forEach(p => { const [x, y] = toPX(p); ctx.beginPath(); ctx.arc(x, y, (p[2] || o.width || 3) / 2 * view.s, 0, Math.PI * 2); ctx.stroke(); });
       }
     }
-    if (o.type === 'text') {
+    if (o.type === 'text' || o.type === 'stitches') {
       const bb = bbox(o); if (bb) { const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]); ctx.strokeRect(a - 4, b - 4, c - a + 8, d - b + 8); }
     }
     ctx.setLineDash([]);
@@ -231,6 +240,27 @@
       ctx.lineWidth = 2; ctx.strokeStyle = '#16181d'; ctx.stroke();
     });
     ctx.restore();
+  }
+  // tap on an edge of the selected shape -> new point there
+  function insertPoint(o, p) {
+    const tol = 12 / view.s;
+    const lists = o.type === 'fill' ? o.paths.map(l => [l, true]) : [[o.points, false]];
+    let best = null;
+    lists.forEach(([l, closed]) => {
+      const n = closed ? l.length : l.length - 1;
+      for (let i = 0; i < n; i++) {
+        const a = l[i], b = l[(i + 1) % l.length], dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1e-9;
+        const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+        const d = Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+        if (d < tol && t > 0.05 && t < 0.95 && (!best || d < best.d)) best = { l, i, d, q: [a[0] + t * dx, a[1] + t * dy] };
+      }
+    });
+    if (!best) return false;
+    const np = o.type === 'satin' ? [best.q[0], best.q[1], best.l[best.i][2]] : best.q;
+    best.l.splice(best.i + 1, 0, np);
+    selNode = o.type === 'fill' ? flatIndex(o, { li: o.paths.indexOf(best.l), pi: best.i + 1 }) : best.i + 1;
+    commit(); renderSheet(); draw(); toast('Point added — drag it into place');
+    return true;
   }
   function flatIndex(o, n) { if (o.type !== 'fill') return n.pi; let k = 0; for (let i = 0; i < n.li; i++) k += o.paths[i].length; return k + n.pi; }
   function nodeAt(o, k) { if (o.type !== 'fill') return { li: 0, pi: k }; for (let li = 0; li < o.paths.length; li++) { if (k < o.paths[li].length) return { li, pi: k }; k -= o.paths[li].length; } return null; }
@@ -309,6 +339,7 @@
     let pts = [];
     if (o.type === 'fill') pts = o.paths.flat();
     else if (o.type === 'text') pts = (o.glyphs || []).flatMap(g => g.paths.flat());
+    else if (o.type === 'stitches') pts = o.lines.flat();
     else pts = o.points;
     if (!pts.length) return null;
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
@@ -320,7 +351,7 @@
     for (let i = doc.objects.length - 1; i >= 0; i--) {
       const o = doc.objects[i]; if (o.hidden) continue;
       if (o.type === 'fill' && pointInLoops(p, o.paths)) return o;
-      if (o.type === 'text') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
+      if (o.type === 'text' || o.type === 'stitches') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
       if (o.type === 'satin' && distToPolyline(p, o.points) < Math.max(tol, (o.points[0] && o.points[0][2] || 3) / 2)) return o;
       if (o.type === 'run' && distToPolyline(p, o.points) < tol) return o;
     }
@@ -347,6 +378,10 @@
     const p = toMM(e.offsetX, e.offsetY);
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
+    if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
+      const so = sel();
+      if (so && so.type !== 'text') { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
+    }
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
     if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
@@ -432,12 +467,14 @@
 
   function translate(o, dx, dy) {
     if (o.type === 'fill') { o.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); (o.flow || []).forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); }
+    else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }));
     else if (o.type === 'text') { o.x += dx; o.y += dy; o.glyphs.forEach(g => g.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }))); }
     else o.points.forEach(q => { q[0] += dx; q[1] += dy; });
   }
 
   function onTap(p) {
     if (preview) return;
+    if (tool === 'select' && sel() && sel().type !== 'text' && insertPoint(sel(), p)) return;
     if (tool === 'select' || tool === 'layers' || tool === 'auto') {
       const o = hitObject(p);
       selId = o ? o.id : null; selNode = -1;
@@ -468,11 +505,11 @@
     const satin = pick.style === 'satin';
     addObject({ type: 'fill', name, paths: loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: currentColor });
     setTool('pick', true);
-    hint('Now swipe across it the way the thread should run');
+    hint('Drag the white dots to adjust the outline, or swipe across the shape to set the thread direction');
   }
   function finishLasso(st) {
     if (!st || st.length < 4) { draw(); return; }
-    let loop = T.simplify(st.map(q => [q[0], q[1]]), 0.12);
+    let loop = T.simplify(st.map(q => [q[0], q[1]]), Math.max(0.2, 3 / view.s));
     if (Math.abs(T.area(loop)) < 1) { toast('Trace all the way around the part you want'); draw(); return; }
     tracedFill([loop], 'Traced ' + currentColor);
   }
@@ -801,7 +838,19 @@
       box.querySelector('input').addEventListener('change', e => onPick(e.target.value));
     } };
   }
-  function mount(parts) { sheet.innerHTML = parts.map(p => typeof p === 'string' ? p : p.html).join(''); parts.forEach(p => p.bind && p.bind()); }
+  function mount(parts) {
+    sheet.innerHTML = parts.map(p => typeof p === 'string' ? p : p.html).join(''); parts.forEach(p => p.bind && p.bind());
+    syncSheetBar();
+  }
+  // panel size: 'min' (just the bar), 'normal', 'max'
+  let sheetSize = (() => { try { return localStorage.getItem('ss_sheet') || 'normal'; } catch (e) { return 'normal'; } })();
+  function syncSheetBar() {
+    const has = sheet.innerHTML.trim() !== '';
+    $('#sheetBar').classList.toggle('show', has);
+    const h = sheet.querySelector('h3'); $('#sheetTitle').textContent = h ? h.textContent : 'Tools';
+    const app = $('#app'); app.classList.toggle('sheet-min', sheetSize === 'min'); app.classList.toggle('sheet-max', sheetSize === 'max');
+  }
+  function setSheetSize(z) { sheetSize = z; try { localStorage.setItem('ss_sheet', z); } catch (e) {} syncSheetBar(); }
   const btn = (id, label, cls) => `<button class="btn ${cls || ''}" id="${id}">${label}</button>`;
   const on = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('click', fn); };
 
@@ -824,7 +873,7 @@
     if (tool === 'auto') return renderAutoSheet();
     if (tool === 'layers') return renderLayers();
     const o = sel();
-    if (!o) { sheet.innerHTML = ''; hint(doc.objects.length ? 'Tap a shape to edit it' : 'Open an image from the menu, then trace it or tap Auto'); return; }
+    if (!o) { sheet.innerHTML = ''; syncSheetBar(); hint(doc.objects.length ? 'Tap a shape to edit it' : 'Open an image from the menu, then trace it or tap Auto'); return; }
     renderProps(o);
   }
 
@@ -924,8 +973,9 @@
 
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
-    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text' }[o.type]}</h3>`];
+    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches' }[o.type]}</h3>`];
     parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
+    if (o.type === 'stitches') parts.push('<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p>');
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
       parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
@@ -962,9 +1012,9 @@
       parts.push(slider('Density', 'den', 0.15, 0.8, 0.01, o.spacing || 0.38, ' mm', (v, f) => set('spacing', v, f)));
       parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tStyle"><button data-v="satin" class="${o.style !== 'fill' ? 'on' : ''}">Satin look</button><button data-v="fill" class="${o.style === 'fill' ? 'on' : ''}">Fill</button></div></div>`);
     }
-    if (o.type !== 'run') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
-    parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
-      <p class="small" style="margin:10px 0 0">Drag white dots to reshape. Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
+    if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
+    parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
+      <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
@@ -1036,7 +1086,7 @@
     const parts = ['<div class="sec"><h3>Sew order (top sews first)</h3>'];
     doc.objects.forEach((o, i) => {
       const P = pieces(o); let n = 0; P.forEach(p => n += p.pts.length);
-      parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${o.color}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text' }[o.type]} · ${n.toLocaleString()} st</span></span>
+      parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${o.color}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches' }[o.type]} · ${n.toLocaleString()} st</span></span>
         <button class="ib" data-a="up" aria-label="Sew earlier"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
         <button class="ib" data-a="down" aria-label="Sew later"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <button class="ib" data-a="eye" aria-label="Show or hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.5-1"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
@@ -1111,6 +1161,7 @@
       const h = hoop(), cx = h.w / 2, cy = h.h / 2, f = q => { q[0] = cx + (q[0] - cx) * k; q[1] = cy + (q[1] - cy) * k; };
       doc.objects.forEach(o => {
         if (o.type === 'fill') { o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f)); }
+        else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
         else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; o.size *= k; if (o.bend) o.bend /= k; layoutText(o); }
         else o.points.forEach(q => { f(q); if (o.type === 'satin') q[2] *= k; });
       });
@@ -1158,6 +1209,7 @@
     if (!mi) return;
     const a = mi.dataset.act;
     if (a === 'image') $('#fImage').click();
+    if (a === 'embfile') $('#fEmb').click();
     if (a === 'vp3') exportFile('vp3');
     if (a === 'dst') exportFile('dst');
     if (a === 'size') { preview = false; renderSizeSheet(); }
@@ -1180,6 +1232,32 @@
     r.onload = () => { loadBg(r.result, true); if (doc.name === 'Untitled') { doc.name = f.name.replace(/\.[^.]+$/, ''); $('#title').textContent = doc.name; } setTool('auto'); toast('Image loaded — trace it by hand or tap Auto-digitize'); };
     r.readAsDataURL(f); e.target.value = '';
   });
+  $('#fEmb').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const buf = new Uint8Array(r.result), ext = f.name.split('.').pop().toLowerCase();
+        const res = ext === 'dst' ? S.readDST(buf) : S.readVP3(buf);
+        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+        res.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(q => { a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[0]); d = Math.max(d, q[1]); })));
+        if (a === Infinity) { toast('No stitches found in that file'); return; }
+        const h = hoop(), dx = h.w / 2 - (a + c) / 2, dy = h.h / 2 - (b + d) / 2;
+        const base = f.name.replace(/\.[^.]+$/, '');
+        let added = 0;
+        res.blocks.forEach((bl, i) => {
+          bl.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }));
+          const o = { type: 'stitches', name: base + ' · ' + (bl.name && !bl.name.startsWith('#') ? bl.name : 'colour ' + (i + 1)), lines: bl.lines, color: bl.color, id: doc.nextId++ };
+          doc.objects.push(o); added++;
+        });
+        selId = null; commit(); renderSheet(); draw();
+        const wIn = (c - a) / IN, hIn = (d - b) / IN;
+        toast(`Added ${added} layer${added > 1 ? 's' : ''} from ${f.name} (${wIn.toFixed(2)} × ${hIn.toFixed(2)} in)`);
+        if (c - a > h.w || d - b > h.h) setTimeout(() => toast('Heads up: it is bigger than the current hoop'), 2800);
+      } catch (err) { console.error(err); toast('Could not read that file: ' + err.message); }
+    };
+    r.readAsArrayBuffer(f); e.target.value = '';
+  });
   $('#fProject').addEventListener('change', e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
@@ -1196,6 +1274,9 @@
     r.readAsText(f); e.target.value = '';
   });
   $('#hoopChip').addEventListener('click', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderHoopSheet(); });
+  $('#sMin').addEventListener('click', () => setSheetSize(sheetSize === 'max' ? 'normal' : 'min'));
+  $('#sMax').addEventListener('click', () => setSheetSize(sheetSize === 'min' ? 'normal' : 'max'));
+  $('#sheetTitle').addEventListener('click', () => setSheetSize(sheetSize === 'min' ? 'normal' : 'min'));
   window.addEventListener('resize', resize);
   if (window.ResizeObserver) new ResizeObserver(() => resize()).observe($('#stage'));
 

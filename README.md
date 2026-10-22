@@ -5,6 +5,9 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 **Install on Android:** open [the latest release](../../releases/latest) on your phone, download `StitchStudio.apk`, and open it. Android will ask you to allow installs from your browser/files app the first time.
 
 ## Tools
+- **Edit points**: after tracing, drag any white dot to adjust the outline (works in Pick and Draw too); in Select, tap an edge to add a point.
+- **Add VP3 / DST as layers** (menu): opens an existing embroidery file into the current design, one layer per thread colour, kept stitch-for-stitch; move it, recolour it, reorder it.
+- **Panel**: minimise or maximise the tool panel with the arrows on its title bar.
 - **Pick**: tap a colour in your picture (touching area or whole colour) to make a layer, then swipe to set the thread direction (a curved swipe makes the thread curve). Satin look or tatami, density presets down to 0.18 mm.
 - **Draw → Fill**: choose a thread colour and trace around any part of the picture with your finger (or tap points); it fills with dense satin, then swipe for direction.
 - **Brush**: stitch brushes. Satin, line (single or triple), fill paint, eraser, and **flow** (draw how the thread should run across a fill).

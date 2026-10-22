@@ -375,6 +375,7 @@
     if (o.type === 'fill') return fillObject(o);
     if (o.type === 'satin') return satinObject(o);
     if (o.type === 'run') return runObject(o);
+    if (o.type === 'stitches') return (o.lines || []).filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' }));
     if (o.type === 'text' && o.glyphs) {
       // glyphs are pre-traced fill shapes (see app text tool); each sewn as satin-look fill
       const pieces = [];
@@ -619,6 +620,69 @@
     patchDistance(B, p030);
     patchDistance(B, p020);
     return B.out();
+  };
+
+  // ---------- READERS -> {blocks:[{color, name, lines:[[[x,y],...]]}]} in mm, y down
+  S.readVP3 = function (buf) {
+    const d = new DataView(buf.buffer || buf, buf.byteOffset || 0, buf.byteLength);
+    let p = 0;
+    const u8 = () => d.getUint8(p++), u16 = () => { const v = d.getUint16(p); p += 2; return v; }, i32 = () => { const v = d.getInt32(p); p += 4; return v; }, u24 = () => (u8() << 16) | (u8() << 8) | u8();
+    const skipStr = () => { const n = u16(); p += n; };
+    const str8 = () => { const n = u16(); const s = new TextDecoder().decode(new Uint8Array(d.buffer, d.byteOffset + p, n)); p += n; return s; };
+    if (String.fromCharCode(u8(), u8(), u8(), u8(), u8()) !== '%vsm%') throw new Error('Not a VP3 file');
+    p = 6; skipStr(); p += 7; skipStr(); p += 32;
+    const cx = i32() / 100, cy = -(i32() / 100);
+    p += 27; skipStr(); p += 24; skipStr();
+    const count = u16(), blocks = [];
+    let x = 0, y = 0;
+    for (let b = 0; b < count; b++) {
+      p += 3; const dist = d.getUint32(p); p += 4; const end = p + dist;
+      const sx = i32() / 100, sy = -(i32() / 100);
+      const ax = sx + cx, ay = sy + cy;
+      if (ax !== 0 && ay !== 0) { x = ax; y = ay; }
+      const nc = u8(); u8(); let color = 0; for (let m = 0; m < nc; m++) { color = u24(); u8(); u16(); }
+      u8(); u8(); str8(); const desc = str8(); str8();
+      p += 15; p += 3;
+      const lines = []; let line = [[x, y]];
+      const sb = new Int8Array(d.buffer, d.byteOffset + p, Math.max(0, end - p));
+      let i = 0;
+      const s16 = (a2, b2) => { const v = ((a2 & 255) << 8) | (b2 & 255); return v > 0x7fff ? v - 0x10000 : v; };
+      while (i < sb.length - 1) {
+        let dx = sb[i], dy = sb[i + 1]; i += 2;
+        if ((dx & 255) !== 0x80) { x += dx; y += dy; line.push([x, y]); continue; }
+        if (dy === 1) { dx = s16(sb[i], sb[i + 1]); i += 2; dy = s16(sb[i], sb[i + 1]); i += 2; i += 2; x += dx; y += dy; line.push([x, y]); }
+        else if (dy === 3) { if (line.length > 1) lines.push(line); line = [[x, y]]; }
+      }
+      if (line.length > 1) lines.push(line);
+      p = end;
+      blocks.push({ color: '#' + color.toString(16).padStart(6, '0'), name: desc, lines: lines.map(l => l.map(q => [q[0] / 10, q[1] / 10])) });
+    }
+    return { blocks };
+  };
+  S.readDST = function (buf) {
+    const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const DEF = ['#1f3a93', '#c8102e', '#f2a900', '#2e7d32', '#000000', '#ffffff', '#6a2c91', '#e35205'];
+    let x = 0, y = 0; const blocks = []; let cur = { color: DEF[0], name: '', lines: [] }, line = [[0, 0]]; blocks.push(cur);
+    const bit = (v, n) => (v >> n) & 1;
+    let jumps = 0;
+    for (let i = 512; i + 2 < b.length; i += 3) {
+      const b0 = b[i], b1 = b[i + 1], b2 = b[i + 2];
+      let dx = 0, dy = 0;
+      dx += bit(b2, 2) * 81 - bit(b2, 3) * 81 + bit(b1, 2) * 27 - bit(b1, 3) * 27 + bit(b0, 2) * 9 - bit(b0, 3) * 9 + bit(b1, 0) * 3 - bit(b1, 1) * 3 + bit(b0, 0) - bit(b0, 1);
+      dy += bit(b2, 5) * 81 - bit(b2, 4) * 81 + bit(b1, 5) * 27 - bit(b1, 4) * 27 + bit(b0, 5) * 9 - bit(b0, 4) * 9 + bit(b1, 7) * 3 - bit(b1, 6) * 3 + bit(b0, 7) - bit(b0, 6);
+      dy = -dy;
+      if ((b2 & 0b11110011) === 0b11110011) break;                       // end
+      if ((b2 & 0b11000011) === 0b11000011) {                             // colour change
+        if (line.length > 1) cur.lines.push(line);
+        cur = { color: DEF[blocks.length % DEF.length], name: '', lines: [] }; blocks.push(cur); line = [[x, y]]; jumps = 0; continue;
+      }
+      x += dx; y += dy;
+      if (b2 & 0x80) { jumps++; if (line.length > 1) cur.lines.push(line); line = [[x, y]]; continue; }   // jump (trims are runs of jumps)
+      jumps = 0; line.push([x, y]);
+    }
+    if (line.length > 1) cur.lines.push(line);
+    blocks.forEach(bl => bl.lines = bl.lines.map(l => l.map(q => [q[0] / 10, q[1] / 10])));
+    return { blocks: blocks.filter(bl => bl.lines.length) };
   };
 
   root.Stitch = S;
