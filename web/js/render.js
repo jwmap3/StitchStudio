@@ -76,12 +76,15 @@
         float across=vT*h;                               // px from centre line
         float e=min(a, L-a);                             // px from nearest end (negative past the end)
         // capsule with a gentle taper where the thread dives into the fabric
-        float shrink=mix(0.55,1.0,smoothstep(-0.2*hw, 1.4*hw, e));
+        float shrink=mix(0.78,1.0,smoothstep(-0.2*hw, 1.2*hw, e));
         float ec=max(-e,0.0);
         float r=sqrt(across*across+ec*ec)/(h*shrink);
         if(r>1.0) discard;
+        if(shadowPass>1.5){                              // base: thread colour bed so the fabric never peeks through
+          float a2=smoothstep(1.0,0.6,r); o=vec4(vCol*0.62*a2, a2); return;
+        }
         if(shadowPass>0.5){
-          float s=(1.0-r); o=vec4(0.0,0.0,0.0,0.24*s*s); return;
+          float s=(1.0-r); o=vec4(0.0,0.0,0.0,0.22*s*s); return;
         }
         float t=clamp(across/(hw*shrink),-1.0,1.0);
         float nz=sqrt(max(1.0-t*t,0.0));
@@ -102,9 +105,9 @@
         vec3 c=base*diff*(1.0-plyAmt+plyAmt*2.0*ply*0.5+plyAmt*0.5);
         c+=mix(base,vec3(1.0,0.98,0.94),0.6)*spec*(0.28+0.5*smoothstep(0.03,0.5,lum));
         // occlusion: dark where the thread enters the fabric and along its sides
-        float ao=mix(0.62,1.0,smoothstep(0.0,2.0*hw,e))*(0.84+0.16*nz);
+        float ao=mix(0.78,1.0,smoothstep(0.0,1.6*hw,e))*(0.84+0.16*nz);
         c*=ao;
-        float aa=clamp((1.0-r)*max(h,1.6)/0.7,0.0,1.0);
+        float aa=clamp((1.0-r)*max(h,1.6)/1.0,0.0,1.0);
         o=vec4(c*aa, aa);
       }`;
       const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -127,7 +130,7 @@
     const { c, gl, u } = G;
     if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
     const s = view.s * dpr, ox = view.x * dpr + m.e * 0, oy = view.y * dpr;
-    const hw = Math.max(1.1, Math.max(opt.thread || 0.46, 0.54) * s / 2);   // thread flattens on fabric: ~0.54 mm wide
+    const hw = Math.max(1.1, (opt.thread || 0.46) * s / 2);
     let budget = opt.limit == null ? Infinity : opt.limit;
     // pack instances (device px), split per colour layer
     let total = 0; layers.forEach(l => l.lines.forEach(ln => total += Math.max(0, ln.length - 1)));
@@ -144,6 +147,7 @@
           if (budget-- <= 0) break;
           const a = ln[i - 1], b = ln[i];
           const x0 = a[0] * s + ox, y0 = a[1] * s + oy, x1 = b[0] * s + ox, y1 = b[1] * s + oy;
+          if ((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) < (0.45 * s) * (0.45 * s)) continue;   // tie-in/off lock stitches sink into the fabric
           if ((x0 < -50 && x1 < -50) || (y0 < -50 && y1 < -50) || (x0 > W + 50 && x1 > W + 50) || (y0 > H + 50 && y1 > H + 50)) continue;
           seed = (seed * 9301 + 49297) % 233280 / 233280;
           const k = n * 8; buf[k] = x0; buf[k + 1] = y0; buf[k + 2] = x1; buf[k + 3] = y1; buf[k + 4] = rgbc[0]; buf[k + 5] = rgbc[1]; buf[k + 6] = rgbc[2]; buf[k + 7] = seed; n++;
@@ -163,7 +167,9 @@
         gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, st * 32); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, st * 32 + 16);
         gl.uniform1f(u.shadowPass, 1); gl.uniform1f(u.grow, 1.7); gl.uniform2f(u.off, shOff * 0.8, shOff * 1.2);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cnt);
-        gl.uniform1f(u.shadowPass, 0); gl.uniform1f(u.grow, 1.0); gl.uniform2f(u.off, 0, 0);
+        gl.uniform1f(u.shadowPass, 2); gl.uniform1f(u.grow, 1.3); gl.uniform2f(u.off, 0, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cnt);
+        gl.uniform1f(u.shadowPass, 0); gl.uniform1f(u.grow, 1.0);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cnt);
       }
     }
