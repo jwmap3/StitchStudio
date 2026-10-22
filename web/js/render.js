@@ -43,7 +43,139 @@
 
   /* layers: [{color:'#rrggbb', lines:[[[x,y],...], ...]}] in sewing order (mm)
      view: {s, x, y} px per mm + offset ; opt: {thread(mm), limit(stitches)} */
+  // ===== GPU renderer: every stitch is a lit, twisted thread (Kajiya-Kay sheen, rounded ends, cast shadows)
+  const G = { ok: null };
+  function glInit() {
+    if (G.ok !== null) return G.ok;
+    try {
+      const c = document.createElement('canvas');
+      const gl = c.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false, preserveDrawingBuffer: true });
+      if (!gl) return (G.ok = false);
+      const vs = `#version 300 es
+      layout(location=0) in vec2 corner;            // x: 0..1 along, y: -1..1 across
+      layout(location=1) in vec4 seg;               // x0 y0 x1 y1 (device px)
+      layout(location=2) in vec4 col;               // rgb + seed
+      uniform vec2 res; uniform float hw; uniform float grow; uniform vec2 off;
+      out vec2 vA; out float vT; out float vLen; out vec3 vCol; out float vSeed; out vec2 vDir;
+      void main(){
+        vec2 p0=seg.xy, p1=seg.zw, d=p1-p0; float L=max(length(d),0.001); vec2 t=d/L, n=vec2(-t.y,t.x);
+        float h=hw*grow, ext=h;
+        float a=mix(-ext, L+ext, corner.x);
+        vec2 p=p0+t*a+n*corner.y*h+off;
+        vA=vec2(a, L); vT=corner.y; vLen=L; vCol=col.rgb; vSeed=col.a; vDir=t;
+        gl_Position=vec4(p.x/res.x*2.0-1.0, 1.0-p.y/res.y*2.0, 0.0, 1.0);
+      }`;
+      const fs = `#version 300 es
+      precision highp float;
+      in vec2 vA; in float vT; in float vLen; in vec3 vCol; in float vSeed; in vec2 vDir;
+      uniform float hw; uniform float pxmm; uniform float shadowPass; uniform float grow;
+      out vec4 o;
+      void main(){
+        float h=hw*grow;
+        float a=vA.x, L=vA.y;
+        float across=vT*h;                               // px from centre line
+        float e=min(a, L-a);                             // px from nearest end (negative past the end)
+        // capsule with a gentle taper where the thread dives into the fabric
+        float shrink=mix(0.55,1.0,smoothstep(-0.2*hw, 1.4*hw, e));
+        float ec=max(-e,0.0);
+        float r=sqrt(across*across+ec*ec)/(h*shrink);
+        if(r>1.0) discard;
+        if(shadowPass>0.5){
+          float s=(1.0-r); o=vec4(0.0,0.0,0.0,0.24*s*s); return;
+        }
+        float t=clamp(across/(hw*shrink),-1.0,1.0);
+        float nz=sqrt(max(1.0-t*t,0.0));
+        vec2 perp=vec2(-vDir.y,vDir.x);
+        vec3 N=normalize(vec3(perp*t, nz));
+        vec3 Lg=normalize(vec3(-0.45,-0.62,0.65));
+        vec3 V=vec3(0.0,0.0,1.0), H=normalize(Lg+V), T=vec3(vDir,0.0);
+        float ndl=max(dot(N,Lg),0.0);
+        float diff=0.66+0.42*ndl;
+        float th=dot(T,H), sinTH=sqrt(max(1.0-th*th,0.0));
+        // twisted ply: diagonal grooves along the thread
+        float amm=a/pxmm;
+        float ply=0.5+0.5*sin((amm/0.33+t*0.85)*6.2832+vSeed*6.0);
+        float plyAmt=smoothstep(2.5,7.0,hw)*0.16;
+        float spec=pow(sinTH,48.0)*smoothstep(-0.1,0.5,ndl)*(1.0-plyAmt*1.6*(1.0-ply));
+        float lum=dot(vCol,vec3(0.2126,0.7152,0.0722));
+        vec3 base=vCol*(0.96+0.08*vSeed);
+        vec3 c=base*diff*(1.0-plyAmt+plyAmt*2.0*ply*0.5+plyAmt*0.5);
+        c+=mix(base,vec3(1.0,0.98,0.94),0.6)*spec*(0.28+0.5*smoothstep(0.03,0.5,lum));
+        // occlusion: dark where the thread enters the fabric and along its sides
+        float ao=mix(0.62,1.0,smoothstep(0.0,2.0*hw,e))*(0.84+0.16*nz);
+        c*=ao;
+        float aa=clamp((1.0-r)*max(h,1.6)/1.1,0.0,1.0);
+        o=vec4(c*aa, aa);
+      }`;
+      const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+      const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      const qb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, -1, 1, -1, 0, 1, 1, 1]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const ib = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ib);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(1, 1);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(2, 1);
+      const U = n => gl.getUniformLocation(prog, n);
+      Object.assign(G, { ok: true, c, gl, prog, vao, ib, u: { res: U('res'), hw: U('hw'), grow: U('grow'), off: U('off'), pxmm: U('pxmm'), shadowPass: U('shadowPass') }, cap: 0 });
+    } catch (e) { console.warn('WebGL thread renderer unavailable:', e); G.ok = false; }
+    return G.ok;
+  }
+  function drawGL(ctx, layers, view, opt) {
+    const W = ctx.canvas.width, H = ctx.canvas.height, m = ctx.getTransform(), dpr = m.a || 1;
+    const { c, gl, u } = G;
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    const s = view.s * dpr, ox = view.x * dpr + m.e * 0, oy = view.y * dpr;
+    const hw = Math.max(1.1, (opt.thread || 0.46) * s / 2);
+    let budget = opt.limit == null ? Infinity : opt.limit;
+    // pack instances (device px), split per colour layer
+    let total = 0; layers.forEach(l => l.lines.forEach(ln => total += Math.max(0, ln.length - 1)));
+    total = Math.min(total, budget);
+    if (G.cap < total) { G.cap = Math.ceil(total * 1.25) + 1024; G.buf = new Float32Array(G.cap * 8); }
+    const buf = G.buf, ranges = []; let n = 0;
+    let seed = 0.37;
+    for (const layer of layers) {
+      if (budget <= 0) break;
+      const rgbc = rgb(layer.color).map(v => v / 255), start = n;
+      for (const ln of layer.lines) {
+        if (budget <= 0) break;
+        for (let i = 1; i < ln.length; i++) {
+          if (budget-- <= 0) break;
+          const a = ln[i - 1], b = ln[i];
+          const x0 = a[0] * s + ox, y0 = a[1] * s + oy, x1 = b[0] * s + ox, y1 = b[1] * s + oy;
+          if ((x0 < -50 && x1 < -50) || (y0 < -50 && y1 < -50) || (x0 > W + 50 && x1 > W + 50) || (y0 > H + 50 && y1 > H + 50)) continue;
+          seed = (seed * 9301 + 49297) % 233280 / 233280;
+          const k = n * 8; buf[k] = x0; buf[k + 1] = y0; buf[k + 2] = x1; buf[k + 3] = y1; buf[k + 4] = rgbc[0]; buf[k + 5] = rgbc[1]; buf[k + 6] = rgbc[2]; buf[k + 7] = seed; n++;
+        }
+      }
+      if (n > start) ranges.push([start, n - start]);
+    }
+    gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    if (n) {
+      gl.useProgram(G.prog); gl.bindVertexArray(G.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, G.ib); gl.bufferData(gl.ARRAY_BUFFER, buf.subarray(0, n * 8), gl.STREAM_DRAW);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.uniform2f(u.res, W, H); gl.uniform1f(u.hw, hw); gl.uniform1f(u.pxmm, s);
+      const shOff = Math.max(0.6, 0.11 * s);
+      for (const [st, cnt] of ranges) {
+        // cast shadow of this colour onto everything sewn before it, then the threads themselves
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, st * 32); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, st * 32 + 16);
+        gl.uniform1f(u.shadowPass, 1); gl.uniform1f(u.grow, 1.7); gl.uniform2f(u.off, shOff * 0.8, shOff * 1.2);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cnt);
+        gl.uniform1f(u.shadowPass, 0); gl.uniform1f(u.grow, 1.0); gl.uniform2f(u.off, 0, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cnt);
+      }
+    }
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(c, 0, 0); ctx.restore();
+  }
+  R.gpu = () => glInit();
   R.draw = function (ctx, layers, view, opt) {
+    opt = opt || {};
+    if (!R.forceCPU && glInit()) { try { drawGL(ctx, layers, view, opt); return; } catch (e) { console.warn(e); G.ok = false; } }
+    R.drawCPU(ctx, layers, view, opt);
+  };
+  R.drawCPU = function (ctx, layers, view, opt) {
     opt = opt || {};
     const w = Math.max(0.7, (opt.thread || 0.42) * view.s);
     const sh = Math.max(0.5, 0.08 * view.s);
