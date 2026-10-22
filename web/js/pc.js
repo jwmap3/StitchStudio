@@ -25,13 +25,23 @@
   let clip = null;
   const selObj = () => SS.sel();
   function moveTo(o, idx) { const d = SS.doc(), i = d.objects.indexOf(o); if (i < 0) return; d.objects.splice(i, 1); d.objects.splice(Math.max(0, Math.min(d.objects.length, idx)), 0, o); SS.commit(); SS.renderSheet(); SS.draw(); }
+  // center the selected layer — or the selected picture, or (nothing selected) the whole design — in the hoop
+  function centerSel(axis) {
+    const o = selObj(), h = SS.hoop(), d = SS.doc();
+    const go = (b, apply) => { const dx = axis === 'v' ? 0 : h.w / 2 - (b[0] + b[2]) / 2, dy = axis === 'h' ? 0 : h.h / 2 - (b[1] + b[3]) / 2; apply(dx, dy); };
+    if (o) { go(SS.bbox(o), (dx, dy) => SS.translate(o, dx, dy)); SS.commit(); SS.draw(); SS.toast('Centered ' + (o.name || 'layer')); return; }
+    if (SS.bgSelected && SS.bgSelected() && d.bg) { const b = d.bg; go([b.x, b.y, b.x + b.w, b.y + b.h], (dx, dy) => { b.x += dx; b.y += dy; }); SS.autosave(); SS.draw(); SS.toast('Centered picture'); return; }
+    const ds = SS.design(); if (!ds.count) { SS.toast('Select a layer or the picture first'); return; }
+    go(ds.bounds, (dx, dy) => d.objects.forEach(x => SS.translate(x, dx, dy))); SS.commit(); SS.draw(); SS.toast('Centered whole design');
+  }
   function centerOf(o) { const b = SS.bbox(o); return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null; }
   function run(cmd) {
     const o = selObj(), d = SS.doc(), h = SS.hoop();
+    if (!o && ['dup', 'del', 'earlier', 'later', 'first', 'last'].includes(cmd)) { SS.toast('Select a layer first (click it on the canvas or in Layers)'); return; }
     switch (cmd) {
       case 'undo': SS.undo(); break;
       case 'redo': SS.redo(); break;
-      case 'copy': if (o) { clip = JSON.stringify(o); SS.toast('Copied ' + (o.name || TYPE[o.type])); } break;
+      case 'copy': if (!o) { SS.toast('Select a layer first'); break; } if (o) { clip = JSON.stringify(o); SS.toast('Copied ' + (o.name || TYPE[o.type])); } break;
       case 'paste': if (clip) { const c = JSON.parse(clip); delete c.id; SS.translate(c, 4, 4); SS.addObject(c); clip = JSON.stringify(c); } break;
       case 'dup': if (o) { const c = JSON.parse(JSON.stringify(o)); delete c.id; SS.translate(c, 4, 4); SS.addObject(c); } break;
       case 'del': if (o) { d.objects = d.objects.filter(x => x !== o); SS.select(null); SS.commit(); } break;
@@ -39,8 +49,10 @@
       case 'later': if (o) SS.move(o, 1); break;
       case 'first': if (o) moveTo(o, 0); break;
       case 'last': if (o) moveTo(o, d.objects.length); break;
-      case 'center': if (o) { const c = centerOf(o); SS.translate(o, h.w / 2 - c[0], h.h / 2 - c[1]); SS.commit(); SS.draw(); } break;
-      case 'centerAll': { const ds = SS.design(); if (!ds.count) break; const b = ds.bounds, dx = h.w / 2 - (b[0] + b[2]) / 2, dy = h.h / 2 - (b[1] + b[3]) / 2; d.objects.forEach(x => SS.translate(x, dx, dy)); SS.commit(); SS.draw(); break; }
+      case 'center': centerSel('both'); break;
+      case 'centerH': centerSel('h'); break;
+      case 'centerV': centerSel('v'); break;
+      case 'centerAll': { if (!SS.design().count) { SS.toast('Nothing to center yet'); break; } const ds = SS.design(); if (!ds.count) break; const b = ds.bounds, dx = h.w / 2 - (b[0] + b[2]) / 2, dy = h.h / 2 - (b[1] + b[3]) / 2; d.objects.forEach(x => SS.translate(x, dx, dy)); SS.commit(); SS.draw(); break; }
       case 'deselect': SS.select(null); break;
       case 'fit': SS.fit(); break;
       case 'actual': SS.zoomTo(ACTUAL); break;

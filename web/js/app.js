@@ -1259,6 +1259,7 @@
     return `</div><div class="sec"><h3>Transform</h3>
       <div class="row"><label>Width</label><input type="number" id="xW" step="0.05" min="0.1" value="${inch(bb[2] - bb[0])}"><span class="val">in</span></div>
       <div class="row"><label>Height</label><input type="number" id="xH" step="0.05" min="0.1" value="${inch(bb[3] - bb[1])}"><span class="val">in</span></div>
+      <div class="btns" style="margin:4px 0 8px">${btn('xC', '⊕ Center in hoop', 'sm')}${btn('xCh', '↔ Center', 'sm')}${btn('xCv', '↕ Center', 'sm')}</div>
       <div class="btns" style="margin:4px 0 8px">${btn('xS9', '− 10%', 'sm')}${btn('xS11', '+ 10%', 'sm')}${btn('xS50', '½ size', 'sm')}${btn('xS200', '2×', 'sm')}</div>
       ${canTurn ? `<div class="btns" style="margin:0 0 8px">${btn('xRl', '⟲ 15°', 'sm')}${btn('xRr', '⟳ 15°', 'sm')}${btn('xR90', '⟳ 90°', 'sm')}${btn('xFh', '⇋ Flip', 'sm')}${btn('xFv', '⇵ Flip', 'sm')}</div>` : '<p class="small" style="margin:0 0 6px">Text resizes here; use Arch and Spacing to shape it.</p>'}
       <p class="small" style="margin:0">Or drag the blue corner on the canvas to resize.${isStitch ? ' Imported stitches keep their stitch count, so resizing more than about 20% makes them denser or looser — re-digitize for big size changes.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
@@ -1268,6 +1269,8 @@
     const setSize = (axis, inches) => { const bb = bbox(o); if (!bb || !(inches > 0)) return; const cur = axis ? bb[3] - bb[1] : bb[2] - bb[0]; if (cur > 0) apply(inches * IN / cur, 0, false, false); };
     const w = $('#xW'), h = $('#xH');
     if (w) { w.addEventListener('change', () => setSize(0, parseFloat(w.value))); h.addEventListener('change', () => setSize(1, parseFloat(h.value))); }
+    const ctr = ax => { const bb = bbox(o), h = hoop(); translate(o, ax === 'v' ? 0 : h.w / 2 - (bb[0] + bb[2]) / 2, ax === 'h' ? 0 : h.h / 2 - (bb[1] + bb[3]) / 2); commit(); renderSheet(); draw(); toast('Centered'); };
+    on('xC', () => ctr('both')); on('xCh', () => ctr('h')); on('xCv', () => ctr('v'));
     on('xS9', () => apply(0.9, 0)); on('xS11', () => apply(1.1, 0)); on('xS50', () => apply(0.5, 0)); on('xS200', () => apply(2, 0));
     on('xRl', () => apply(1, -15)); on('xRr', () => apply(1, 15)); on('xR90', () => apply(1, 90));
     on('xFh', () => apply(1, 0, true, false)); on('xFv', () => apply(1, 0, false, true));
@@ -1686,6 +1689,7 @@
     zoomTo(s) { const r = cv.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, mm = toMM(cx, cy); view.s = s; view.x = cx - mm[0] * s; view.y = cy - mm[1] * s; draw(); },
     pan(dx, dy) { view.x += dx; view.y += dy; draw(); },
     Render, Stitch: S, hitObject, IN, threadName,
+    bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
   window.__ss = { selId: () => selId, tool: () => tool, drawNow, zoom: (x, y, f) => { const r = cv.getBoundingClientRect(); view.s *= f; view.x = r.width / 2 - x * view.s; view.y = r.height / 2 - y * view.s; draw(); }, toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
