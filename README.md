@@ -16,7 +16,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Draw → Satin**: centre-line with width, or **point–counterpoint** (tap alternating edges). **Draw → Line**: running or triple (bean) stitch.
 - **Hoops (Designer Topaz 30)**: tap the hoop button on the canvas. Splendid Square 120×120 and Royal 360×200 (included), Crown 260×200, Jewel 240×150, metal 180×130, 100×100, or a custom size up to the machine's 360×200 mm field; landscape/portrait; fit warnings.
 - **Inches**: inch grid and rulers, image and design size set in inches (menu).
-- **Text**: lettering with arch, satin-look or fill.
+- **Text**: lettering with arch (up or smile), satin-look or fill, stitch angle, and **borders**: one or two dense satin outlines in any colours (varsity look). Bundled fonts: Graduate (collegiate), Anton (condensed block), Roboto Slab — all SIL Open Font License (see web/fonts). One-tap looks: Varsity outline, Block + border, Varsity + border, Plain slab.
 - **Auto**: auto-digitize into thread layers with options: 2–24 colours matched to a 60-colour thread chart (or exact image colours), stitch style Mixed / Satin shine / Tatami, density presets, direction (follow shape / one angle / varied), underlay, pull comp, optional thin or bold outline in any colour, quality, detail and edge smoothing, replace-or-add on re-run.
 - **Thread chart & My threads**: every colour picker has "All 60 threads" with names, plus your 7 personal quick-access threads (set them in Pick → My threads → Edit). In Pick, tap one of your threads to stitch new picks in it.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.

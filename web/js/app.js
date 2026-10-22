@@ -55,7 +55,7 @@
   let bgImg = null;
 
   function newDoc() {
-    return { name: 'Untitled', hoopId: 'splendid', hoopRot: false, customHoop: { w: 150, h: 150 }, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3, realistic: true, fabric: '#e9e7e1' };
+    return { name: 'Untitled', hoopId: 'splendid', hoopRot: false, customHoop: { w: 150, h: 150 }, width: 100, objects: [], nextId: 1, bg: null, bgOpacity: 0.55, satinWidth: 3, realistic: true, fontsV2: true, fabric: '#e9e7e1' };
   }
   const hoopDef = () => HOOPS.find(h => h.id === doc.hoopId) || HOOPS[0];
   const hoop = () => {
@@ -94,6 +94,7 @@
   }
   function loadSaved() {
     try { const s = localStorage.getItem('ss_doc'); if (s) { doc = Object.assign(newDoc(), JSON.parse(s)); } } catch (e) {}
+    if (!doc.fontsV2) { (doc.objects || []).forEach(o => { if (o.type === 'text') o.font = (o.font || 0) + 3; }); doc.fontsV2 = true; }
     if (typeof doc.hoop === 'number' && !doc.hoopIdSet) { doc.hoopId = ['small100', 'splendid', 'metal180', 'crown', 'royal'][doc.hoop] || 'splendid'; delete doc.hoop; }
     lastSnap = snapshot();
     if (doc.bg) loadBg(doc.bg.src, false);
@@ -124,7 +125,7 @@
   const toPX = (p) => [p[0] * view.s + view.x, p[1] * view.s + view.y];
 
   // ---------------- stitches per object (cached)
-  const GEO = { paths: 1, points: 1, lines: 1, flow: 1, glyphs: 1, blocks: 1, __p: 1 };
+  const GEO = { paths: 1, points: 1, lines: 1, flow: 1, glyphs: 1, blocks: 1, borderLoops: 1, loops: 1, __p: 1 };
   function geoHash(v, h) {
     if (Array.isArray(v)) { h = (h * 31 + v.length) % 2147483647; for (let i = 0; i < v.length; i++) { const e = v[i]; h = typeof e === 'number' ? (h * 33 + Math.round(e * 1000) * (i + 7)) % 2147483647 : geoHash(e, h); } return h; }
     if (v && typeof v === 'object') { for (const k in v) h = geoHash(v[k], (h * 7 + k.length) % 2147483647); return h; }
@@ -150,6 +151,10 @@
     for (const o of list) {
       if (o.hidden) continue;
       if (o.type === 'import') (o.blocks || []).forEach((bl, i) => out.push({ id: o.id + ':' + i, type: 'stitches', lines: bl.lines, color: bl.color, name: o.name }));
+      else if (o.type === 'text' && o.borderLoops && o.borderLoops.some(l => l.length)) {
+        const t = Object.assign({}, o); delete t.borderLoops; out.push(t);
+        (o.borders || []).forEach((b, bi) => { if (b && b.w > 0 && o.borderLoops[bi] && o.borderLoops[bi].length) out.push({ id: o.id + ':b' + bi, type: 'border', loops: o.borderLoops[bi], width: b.w + 0.25, color: b.color, spacing: 0.36, underlay: true }); });
+      }
       else out.push(o);
     }
     return out;
@@ -615,7 +620,7 @@
     if (o.type === 'fill') { o.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); (o.flow || []).forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); }
     else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }));
     else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })));
-    else if (o.type === 'text') { o.x += dx; o.y += dy; o.glyphs.forEach(g => g.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }))); }
+    else if (o.type === 'text') { o.x += dx; o.y += dy; o.glyphs.forEach(g => g.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }))); (o.borderLoops || []).forEach(ls => ls.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }))); }
     else o.points.forEach(q => { q[0] += dx; q[1] += dy; });
   }
 
@@ -811,17 +816,35 @@
   // ---------------- text (glyphs traced from the phone's fonts)
   let textAt = null;
   const FONTS = [
+    { label: 'Varsity (collegiate)', css: '400 {px}px Graduate, serif' },
+    { label: 'Condensed block', css: '400 {px}px Anton, Impact, sans-serif' },
+    { label: 'Slab serif', css: '700 {px}px "Roboto Slab SS", "Noto Serif", serif' },
     { label: 'Block (bold sans)', css: '800 {px}px system-ui, Roboto, Arial, sans-serif' },
-    { label: 'Varsity (serif bold)', css: '800 {px}px Georgia, "Noto Serif", serif' },
+    { label: 'Serif bold', css: '800 {px}px Georgia, "Noto Serif", serif' },
     { label: 'Script', css: 'italic 600 {px}px "Dancing Script", "Brush Script MT", cursive' },
     { label: 'Condensed', css: '700 {px}px "Roboto Condensed", "Arial Narrow", sans-serif-condensed, sans-serif' },
     { label: 'Classic serif', css: '600 {px}px "Times New Roman", "Noto Serif", serif' },
     { label: 'Monospace', css: '700 {px}px "Roboto Mono", monospace' },
   ];
+  // one-tap pro lettering looks (fonts 0..2 are bundled with the app)
+  const TEXT_PRESETS = [
+    { id: 'varsity', label: 'Varsity outline', font: 0, color: '#ffffff', borders: [{ w: 0.7, color: '#000000' }, { w: 1.4, color: '#ffffff' }] },
+    { id: 'block', label: 'Block + border', font: 1, color: '#c8102e', borders: [{ w: 1.3, color: '#ffffff' }] },
+    { id: 'bordered', label: 'Varsity + border', font: 0, color: '#c8102e', borders: [{ w: 1.2, color: '#ffffff' }] },
+    { id: 'slab', label: 'Plain slab', font: 2, color: '#ffffff', borders: [] },
+  ];
+  const fontTried = {};
   function layoutText(o) {
     const PXMM = 14; // trace resolution (px per mm)
     const fpx = Math.round(o.size * PXMM * 1.35);
     const font = FONTS[o.font || 0].css.replace('{px}', fpx);
+    if (document.fonts && !document.fonts.check(font) && !fontTried[font]) {
+      fontTried[font] = true;
+      document.fonts.load(font).then(() => { doc.objects.filter(x => x.type === 'text').forEach(layoutText); cache.clear(); draw(); }).catch(() => {});
+    }
+    const borders = (o.borders || []).filter(b => b && b.w > 0);
+    const bTot = borders.reduce((t, b) => t + b.w, 0);
+    const borderLoops = borders.map(() => []);
     const mc = document.createElement('canvas').getContext('2d');
     mc.font = font;
     const chars = [...(o.text || '')];
@@ -832,29 +855,47 @@
     chars.forEach((ch, i) => {
       const mid = s + adv[i] / 2; s += adv[i];
       if (!ch.trim()) return;
-      const w = Math.ceil(mc.measureText(ch).width + fpx * 0.6), h = Math.ceil(fpx * 1.5);
+      const pad = fpx * 0.3 + bTot * PXMM + 4;
+      const w = Math.ceil(mc.measureText(ch).width + pad * 2), h = Math.ceil(fpx * 1.2 + pad * 2);
       const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
       const g = c2.getContext('2d'); g.font = font; g.fillStyle = '#000'; g.textBaseline = 'alphabetic';
-      const bx = fpx * 0.3, by = fpx * 1.1;
+      const bx = pad, by = pad + fpx * 0.95;
       g.fillText(ch, bx, by);
       const data = g.getImageData(0, 0, w, h).data;
       const M = new Uint8Array(w * h);
       for (let k = 0; k < w * h; k++) M[k] = data[k * 4 + 3] > 110 ? 1 : 0;
       const cw = mc.measureText(ch).width;
       let loops = T.contours(M, w, h).map(l => T.simplify(l, 0.6)).filter(l => Math.abs(T.area(l)) > 6);
+      // borders: centre line of each satin border = letter edge pushed out by (inner borders + half this border)
+      const bl = borders.map((b, bi) => {
+        const off = borders.slice(0, bi).reduce((t, x) => t + x.w, 0) + b.w / 2;
+        // grow by (offset + r), then shrink by r: inside corners get a radius r, so the satin can turn cleanly
+        const r = (b.w / 2 + 0.25) * PXMM;
+        const grab = () => { const d2 = g.getImageData(0, 0, w, h).data, M2 = new Uint8Array(w * h); for (let k = 0; k < w * h; k++) M2[k] = d2[k * 4 + 3] > 110 ? 1 : 0; return M2; };
+        g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, w, h); g.fillText(ch, bx, by);
+        g.lineJoin = 'round'; g.lineCap = 'round'; g.strokeStyle = '#000'; g.lineWidth = (off * PXMM + r) * 2; g.strokeText(ch, bx, by);
+        const grown = T.contours(grab(), w, h);
+        g.globalCompositeOperation = 'destination-out'; g.lineWidth = r * 2;
+        grown.forEach(l => { g.beginPath(); l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.stroke(); });
+        g.globalCompositeOperation = 'source-over';
+        return T.contours(grab(), w, h).map(l => T.simplify(l, 0.8)).filter(l => Math.abs(T.area(l)) > 20);
+      });
       // glyph-local mm: origin at glyph's horizontal centre on the baseline
       const R = Math.abs(o.bend || 0) < 2 ? 0 : 2000 / o.bend;   // bend > 0 arches up, < 0 smiles down
       let gx, gy, a = 0;
       if (Math.abs(R) < 1) { gx = o.x + mid; gy = o.y; }
       else { a = mid / R; gx = o.x + R * Math.sin(a); gy = o.y + R - R * Math.cos(a); }
       const ca = Math.cos(a), sa = Math.sin(a);
-      loops = loops.map(l => l.map(q => {
+      const map = l => l.map(q => {
         const lx = (q[0] - bx - cw / 2) / PXMM, ly = (q[1] - by) / PXMM;
         return [gx + lx * ca - ly * sa, gy + lx * sa + ly * ca];
-      }));
-      if (loops.length) glyphs.push({ paths: loops, angle: a * 180 / Math.PI + (o.style === 'fill' ? 45 : 0) });
+      });
+      loops = loops.map(map);
+      bl.forEach((ls, bi) => ls.forEach(l => borderLoops[bi].push(map(l))));
+      if (loops.length) glyphs.push({ paths: loops, angle: a * 180 / Math.PI + (o.style === 'fill' ? 45 : 0) + (o.tAngle || 0) });
     });
     o.glyphs = glyphs;
+    o.borderLoops = borderLoops;
   }
 
   // ---------------- auto-digitize
@@ -1221,6 +1262,36 @@
     on('xRl', () => apply(1, -15)); on('xRr', () => apply(1, 15)); on('xR90', () => apply(1, 90));
     on('xFh', () => apply(1, 0, true, false)); on('xFv', () => apply(1, 0, false, true));
   }
+  const BW = [[0, 'None'], [0.6, 'Thin'], [1.2, 'Medium'], [2.0, 'Wide']];
+  function presetRow(o) {
+    return `<div class="row" style="align-items:flex-start"><label style="padding-top:8px">Look</label><div class="btns" id="tPre" style="flex:1">${TEXT_PRESETS.map(p => `<button class="btn sm" data-p="${p.id}">${p.label}</button>`).join('')}</div></div>`;
+  }
+  function borderPanel(o) {
+    const bs = o.borders || [];
+    let h = '</div><div class="sec"><h3>Borders</h3>';
+    [0, 1].forEach(bi => {
+      const b = bs[bi] || { w: 0, color: bi ? '#ffffff' : '#000000' };
+      if (bi === 1 && !(bs[0] && bs[0].w > 0)) return;
+      h += `<div class="row"><label>${bi ? 'Outer border' : 'Border'}</label><div class="toggle" id="tB${bi}" style="flex:1;display:flex">${BW.map(([v, l]) => `<button data-v="${v}" class="${Math.abs((b.w || 0) - v) < 0.05 ? 'on' : ''}" style="flex:1;padding:8px 4px;font-size:13px">${l}</button>`).join('')}</div></div>`;
+      if (b.w > 0) h += `<div class="swatches" id="tBc${bi}" style="margin:0 0 10px">${favs.concat(THREADS.filter(c => !favs.includes(c))).slice(0, 18).map(c => `<button class="sw ${c === b.color ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px"></button>`).join('')}</div>`;
+    });
+    return h + '<p class="small" style="margin:0 0 6px">Borders are dense satin around every letter, sewn after the letters. Two borders = a thin inner line plus an outer edge (the varsity look).</p>';
+  }
+  function bindText(o) {
+    const relay = () => { layoutText(o); commit(); renderSheet(); draw(); };
+    const pr = $('#tPre'); if (pr) pr.querySelectorAll('[data-p]').forEach(b2 => b2.addEventListener('click', () => {
+      const p = TEXT_PRESETS.find(x => x.id === b2.dataset.p); o.font = p.font; o.color = p.color; o.borders = JSON.parse(JSON.stringify(p.borders)); o.style = 'satin'; relay(); toast(p.label);
+    }));
+    [0, 1].forEach(bi => {
+      const t = $('#tB' + bi); if (t) t.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => {
+        o.borders = (o.borders || []).slice(); const cur = o.borders[bi] || { color: bi ? '#ffffff' : '#000000' };
+        o.borders[bi] = { w: +b2.dataset.v, color: cur.color };
+        if (bi === 0 && !(+b2.dataset.v)) o.borders = [];
+        relay();
+      }));
+      const c = $('#tBc' + bi); if (c) c.querySelectorAll('[data-c]').forEach(b2 => b2.addEventListener('click', () => { o.borders[bi].color = b2.dataset.c; commit(); renderSheet(); draw(); }));
+    });
+  }
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
     const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]}</h3>`];
@@ -1268,6 +1339,7 @@
       parts.push(`<div class="row"><label>Shape</label><div class="toggle" id="tCurve"><button data-v="1" class="${o.curve !== false ? 'on' : ''}">Curved</button><button data-v="0" class="${o.curve === false ? 'on' : ''}">Straight</button></div></div>`);
     }
     if (o.type === 'text') {
+      parts.push(presetRow(o));
       parts.push(`<div class="row"><label>Text</label><input type="text" id="tText" value="${esc(o.text)}"></div>`);
       parts.push(`<div class="row"><label>Font</label><select id="tFont">${FONTS.map((f, i) => `<option value="${i}" ${i === (o.font || 0) ? 'selected' : ''}>${f.label}</option>`).join('')}</select></div>`);
       parts.push(slider('Letter height', 'ts', 4, 60, 0.5, o.size, ' mm', (v, f) => set('size', v, f)));
@@ -1275,13 +1347,16 @@
       parts.push(slider('Spacing', 'tl', -2, 6, 0.1, o.spacingLetters || 0, ' mm', (v, f) => set('spacingLetters', v, f)));
       parts.push(densityPresets(o));
       parts.push(slider('Density', 'den', 0.15, 0.8, 0.01, o.spacing || 0.38, ' mm', (v, f) => set('spacing', v, f)));
+      parts.push(slider('Stitch angle', 'tang', -90, 90, 1, o.tAngle || 0, '°', (v, f) => set('tAngle', v, f)));
       parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tStyle"><button data-v="satin" class="${o.style !== 'fill' ? 'on' : ''}">Satin look</button><button data-v="fill" class="${o.style === 'fill' ? 'on' : ''}">Fill</button></div></div>`);
     }
+    if (o.type === 'text') parts.push(borderPanel(o));
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
     parts.push(transformPanel(o));
     parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
+    if (o.type === 'text') bindText(o);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
@@ -1317,15 +1392,18 @@
       `<div class="row"><label>Text</label><input type="text" id="nText" value="${esc(st.text)}"></div>`,
       `<div class="row"><label>Font</label><select id="nFont">${FONTS.map((f, i) => `<option value="${i}" ${i === st.font ? 'selected' : ''}>${f.label}</option>`).join('')}</select></div>`,
       slider('Letter height', 'ns', 4, 60, 0.5, st.size, ' mm', v => st.size = v),
+      `<div class="row" style="align-items:flex-start"><label style="padding-top:8px">Look</label><div class="btns" id="nPre" style="flex:1">${TEXT_PRESETS.map(p => `<button class="btn sm ${st.preset === p.id ? 'primary' : ''}" data-p="${p.id}">${p.label}</button>`).join('')}</div></div>`,
       colorPicker(currentColor, c => { currentColor = c; renderSheet(); }),
       `<div class="btns" style="margin-top:10px">${btn('nAdd', 'Add text', 'primary')}</div></div>`];
     mount(parts);
     $('#nText').addEventListener('input', e => st.text = e.target.value);
     $('#nFont').addEventListener('change', e => st.font = +e.target.value);
+    sheet.querySelectorAll('#nPre [data-p]').forEach(b2 => b2.addEventListener('click', () => { const p = TEXT_PRESETS.find(x => x.id === b2.dataset.p); st.preset = st.preset === p.id ? null : p.id; if (st.preset) { st.font = p.font; currentColor = p.color; } renderSheet(); }));
     on('nAdd', () => {
       if (!st.text.trim()) { toast('Type some text'); return; }
       const h = hoop(); const p = textAt || [h.w / 2, h.h / 2];
-      const o = { type: 'text', name: 'Text: ' + st.text.slice(0, 14), text: st.text, font: st.font, size: st.size, bend: 0, x: p[0], y: p[1], style: 'satin', spacing: 0.38, underlay: true, pullComp: 0.12 };
+      const pr = TEXT_PRESETS.find(x => x.id === st.preset);
+      const o = { type: 'text', borders: pr ? JSON.parse(JSON.stringify(pr.borders)) : [], name: 'Text: ' + st.text.slice(0, 14), text: st.text, font: st.font, size: st.size, bend: 0, x: p[0], y: p[1], style: 'satin', spacing: 0.38, underlay: true, pullComp: 0.12 };
       layoutText(o); textAt = null; addObject(o); setTool('select', true);
     });
   }
@@ -1375,7 +1453,7 @@
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
     const parts = ['<div class="sec"><h3>Sew order (top sews first)</h3>'];
     doc.objects.forEach((o, i) => {
-      const P = pieces(o); let n = 0; P.forEach(p => n += p.pts.length);
+      const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
       parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${dotBg}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]} · ${n.toLocaleString()} st</span></span>
         <button class="ib" data-a="up" aria-label="Sew earlier"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>

@@ -324,7 +324,7 @@
       return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
     };
     const nrm = t => {
-      const e = Math.min(0.6, total / 4);
+      const e = Math.min(o.nwin || 0.6, total / 4);
       const p = at(Math.max(0, t - e)), q = at(Math.min(total, t + e));
       const dx = q[0] - p[0], dy = q[1] - p[1], d = Math.hypot(dx, dy) || 1;
       return [-dy / d, dx / d];
@@ -338,7 +338,13 @@
         const t = (reverse ? (n - i) : i) / n * total;
         const p = at(t), N = nrm(t), hw = Math.max(0.2, p[2] / 2 * wscale + extra);
         const side = i % 2 ? -1 : 1;
-        pts.push([p[0] + N[0] * hw * side, p[1] + N[1] * hw * side]);
+        // short stitches: on the inside of a tight turn, every other stitch stops part-way
+        // so the satin doesn't bunch into a starburst
+        let len = hw;
+        const e = Math.max(0.5, hw * 1.2), a0 = nrm(Math.max(0, t - e)), a1 = nrm(Math.min(total, t + e));
+        const turn = a0[0] * a1[1] - a0[1] * a1[0];          // signed sine of the turn
+        if (Math.abs(turn) > 0.25 && Math.sign(turn) === -side && (i >> 1) % 2 === 1) len = hw * Math.max(0.35, 1 - Math.abs(turn) * 0.9);
+        pts.push([p[0] + N[0] * len * side, p[1] + N[1] * len * side]);
       }
       return pts;
     };
@@ -375,6 +381,26 @@
     if (o.type === 'fill') return fillObject(o);
     if (o.type === 'satin') return satinObject(o);
     if (o.type === 'run') return runObject(o);
+    if (o.type === 'border') {
+      // satin outline around each traced edge loop (letter borders)
+      const out = [];
+      (o.loops || []).forEach(l => {
+        if (l.length < 3) return;
+        let ar = 0, per = 0; for (let i = 0; i < l.length; i++) { const p = l[i], q = l[(i + 1) % l.length]; ar += p[0] * q[1] - q[0] * p[1]; per += hyp(p, q); }
+        ar = Math.abs(ar) / 2;
+        const inner = 2 * ar / Math.max(per, 1e-6);           // ≈ half the loop's narrow width
+        if (inner < o.width * 1.35) {
+          // loop too small for a clean satin ring: fill it solid instead (no starbursts)
+          let cx = 0, cy = 0; l.forEach(q => { cx += q[0]; cy += q[1]; }); cx /= l.length; cy /= l.length;
+          const grow = l.map(q => { const dx = q[0] - cx, dy = q[1] - cy, d = Math.hypot(dx, dy) || 1; return [q[0] + dx / d * o.width / 2, q[1] + dy / d * o.width / 2]; });
+          tatami([grow], { angle: 45, spacing: 0.4, stitchLen: 2.5, pullComp: 0.1 }).forEach(r => { if (r.length > 1) out.push({ pts: r, kind: 'top' }); });
+          return;
+        }
+        const pts = l.concat([l[0], l[1]]).map(q => [q[0], q[1], o.width]);
+        satinObject({ points: pts, spacing: o.spacing || 0.38, underlay: o.underlay, pullComp: 0.12, nwin: 0.3 }).forEach(pc => out.push(pc));
+      });
+      return orderPieces(out);
+    }
     if (o.type === 'import') return (o.blocks || []).flatMap(bl => bl.lines.filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' })));
     if (o.type === 'stitches') return (o.lines || []).filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' }));
     if (o.type === 'text' && o.glyphs) {
