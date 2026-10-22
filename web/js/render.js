@@ -27,6 +27,9 @@
         edge: css(scale(base, 0.42 + 0.08 * s)),               // where the thread dives into the fabric
         body: css(scale(base, f * 0.86)),                      // thread body
         mid: css(mix(scale(base, f), [255, 245, 225], 0.06 + 0.10 * s)),   // rounded crown
+        c1: css(mix(scale(base, f * 1.04), [255, 248, 230], 0.16 + 0.12 * s), 0.85),   // centre light, outer
+        c2: css(mix(scale(base, f * 1.08), [255, 250, 236], 0.30 + 0.16 * s), 0.8),    // centre light, inner
+        c3: css(mix(scale(base, f * 1.1), [255, 252, 244], 0.52 + 0.18 * s), 0.55 + 0.3 * s), // hottest streak
         ply: css(scale(base, 0.62 + 0.1 * s), 0.55),           // twist grooves
         hi: css(mix(scale(base, f), [255, 250, 235], 0.6), hiA) // specular glint
       });
@@ -52,7 +55,7 @@
       const sd = shades(rgb(layer.color));
       let P, used = 0;
       const NB = BUCKETS * VAR.length; const mk = () => { const a = []; for (let b = 0; b < NB; b++) a.push(new Path2D()); return a; };
-      const reset = () => { P = { full: mk(), body: mk(), mid: mk(), hi: mk(), shadow: new Path2D() }; used = 0; };
+      const reset = () => { P = { full: mk(), body: mk(), mid: mk(), c1: mk(), c2: mk(), c3: mk(), hi: mk(), shadow: new Path2D() }; used = 0; };
       const flush = () => {
         if (!used) return;
         ctx.lineCap = 'round';
@@ -60,6 +63,10 @@
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].edge; ctx.lineWidth = w; ctx.stroke(P.full[b]); }
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].body; ctx.lineWidth = w * 0.72; ctx.stroke(P.body[b]); }
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].mid; ctx.lineWidth = w * 0.5; ctx.stroke(P.mid[b]); }
+        // light down the centre of the column: brighter, narrower bands toward the middle of each stitch
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].c1; ctx.lineWidth = w * 0.56; ctx.stroke(P.c1[b]); }
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].c2; ctx.lineWidth = w * 0.5; ctx.stroke(P.c2[b]); }
+        for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].c3; ctx.lineWidth = w * 0.42; ctx.stroke(P.c3[b]); }
         if (w > 1.4) for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].hi; ctx.lineWidth = Math.max(0.6, w * 0.2); ctx.stroke(P.hi[b]); }
         reset();
       };
@@ -74,11 +81,19 @@
           const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
           if (L2 < 0.04) continue;
           let ang = Math.atan2(dy, dx); if (ang < 0) ang += Math.PI; if (ang >= Math.PI) ang -= Math.PI;
-          let h = ((i * 2654435761) ^ (ln.length * 40503)) >>> 0; const b = (h % 3) * BUCKETS + Math.min(BUCKETS - 1, Math.floor(ang / Math.PI * BUCKETS));
+          const h = (Math.imul(i + 1, 2654435761) ^ Math.imul(ln.length + 7, 40503)) >>> 0; const b = (h % 3) * BUCKETS + Math.min(BUCKETS - 1, Math.floor(ang / Math.PI * BUCKETS));
           const len = Math.sqrt(L2), e = Math.min(0.35, w * 0.55 / len);   // end darkening scales with thread width
           P.full[b].moveTo(x0, y0); P.full[b].lineTo(x1, y1);
           inset(P.body[b], x0, y0, x1, y1, e * 0.5);
           inset(P.mid[b], x0, y0, x1, y1, Math.min(0.4, e * 1.2 + 0.08));
+          // centre band: only on stitches long enough to read as a column (satin), with a little natural jitter
+          if (len > w * 2.5) {
+            const j = ((h >>> 8) % 100) / 100 * 0.05 - 0.025;
+            const sx = (x1 - x0) * j, sy = (y1 - y0) * j;
+            inset(P.c1[b], x0 + sx, y0 + sy, x1 + sx, y1 + sy, 0.24);
+            inset(P.c2[b], x0 + sx, y0 + sy, x1 + sx, y1 + sy, 0.33);
+            inset(P.c3[b], x0 + sx, y0 + sy, x1 + sx, y1 + sy, 0.41);
+          }
           // glint sits slightly towards the light, on the crown of the thread
           const ox = -w * 0.12, oy = -w * 0.16;
           inset(P.hi[b], x0 + ox, y0 + oy, x1 + ox, y1 + oy, Math.min(0.42, e * 1.6 + 0.16));
