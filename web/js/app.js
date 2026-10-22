@@ -8,11 +8,11 @@
 
   // ---------------- state
   const HOOPS = [
-    { name: '4×4 in (100×100)', w: 100, h: 100 },
-    { name: '120×120 (Splendid Square)', w: 120, h: 120 },
-    { name: '5×7 in (130×180)', w: 130, h: 180 },
-    { name: '260×200 (Crown)', w: 260, h: 200 },
-    { name: '360×200 (Royal)', w: 360, h: 200 },
+    { name: '4 × 4 in (100 × 100 mm)', w: 100, h: 100 },
+    { name: '4.7 × 4.7 in — Splendid Square (120 mm)', w: 120, h: 120 },
+    { name: '5 × 7 in (130 × 180 mm)', w: 130, h: 180 },
+    { name: '10.2 × 7.9 in — Crown (260 × 200 mm)', w: 260, h: 200 },
+    { name: '14.2 × 7.9 in — Royal (360 × 200 mm)', w: 360, h: 200 },
   ];
   const THREADS = ['#000000', '#ffffff', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#e35205', '#8a5a2b', '#5c3a1e', '#1f3a93', '#0b2a5b', '#2e7d32', '#6abf4b', '#7a7a7a', '#c0c0c0', '#f4a6c1', '#6a2c91', '#00a3ad'];
   let doc = newDoc();
@@ -23,6 +23,12 @@
   let fillMode = 'points';       // 'points' | 'quick' (Quick Draw)
   let quickTol = 40;
   let stroke = null;             // live brush stroke
+  let drawKind = 'fill';         // Draw tool: fill | satin | run
+  let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
+  const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin' };   // Pick tool
+  let imgMove = false;           // drag the picture instead of the view
+  const IN = 25.4;
+  const inch = mm => (mm / IN).toFixed(2);
   const cache = new Map();       // id -> {key, pieces}
   let view = { s: 4, x: 0, y: 0 }; // px per mm, offset px
   const undoStack = [], redoStack = [];
@@ -109,11 +115,18 @@
     ctx.fillStyle = preview ? '#e9e7e1' : '#1b1e25';
     ctx.fillRect(hx, hy, h.w * view.s, h.h * view.s);
     if (!preview) {
-      ctx.strokeStyle = '#2a2f3a'; ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let x = 10; x < h.w; x += 10) { const [a] = toPX([x, 0]); ctx.moveTo(a, hy); ctx.lineTo(a, hy + h.h * view.s); }
-      for (let y = 10; y < h.h; y += 10) { const [, b] = toPX([0, y]); ctx.moveTo(hx, b); ctx.lineTo(hx + h.w * view.s, b); }
-      ctx.stroke();
+      // inch grid: quarter inches faint, whole inches stronger, numbered along the top and left
+      const q = IN / 4, showQ = q * view.s > 9;
+      ctx.lineWidth = 1;
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass ? '#3a4150' : '#242934'; ctx.beginPath();
+        for (let x = q, k = 1; x < h.w; x += q, k++) { if ((k % 4 === 0) !== !!pass || (!pass && !showQ)) continue; const [a] = toPX([x, 0]); ctx.moveTo(a, hy); ctx.lineTo(a, hy + h.h * view.s); }
+        for (let y = q, k = 1; y < h.h; y += q, k++) { if ((k % 4 === 0) !== !!pass || (!pass && !showQ)) continue; const [, b] = toPX([0, y]); ctx.moveTo(hx, b); ctx.lineTo(hx + h.w * view.s, b); }
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#7b8494'; ctx.font = '11px system-ui, sans-serif';
+      for (let k = 1; k * IN < h.w; k++) { const [a] = toPX([k * IN, 0]); ctx.fillText(k + '"', a + 3, hy + 12); }
+      for (let k = 1; k * IN < h.h; k++) { const [, b] = toPX([0, k * IN]); ctx.fillText(k + '"', hx + 3, b - 3); }
     }
     ctx.strokeStyle = '#5b6372'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
     ctx.strokeRect(hx, hy, h.w * view.s, h.h * view.s); ctx.setLineDash([]);
@@ -156,6 +169,16 @@
     ctx.save();
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#f2b134'; ctx.setLineDash([5, 4]);
     if (o.type === 'fill') o.paths.forEach(l => { ctx.beginPath(); l.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.stroke(); });
+    if (o.type === 'fill' && !o.flow && tool === 'pick') {
+      const bb = bbox(o); if (bb) {
+        const c = toPX([(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2]), L = Math.min(140, Math.hypot(bb[2] - bb[0], bb[3] - bb[1]) * view.s * 0.35), an = (o.angle || 0) * Math.PI / 180;
+        ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 3;
+        const ax = Math.cos(an) * L, ay = Math.sin(an) * L;
+        ctx.beginPath(); ctx.moveTo(c[0] - ax, c[1] - ay); ctx.lineTo(c[0] + ax, c[1] + ay);
+        [[1, 1], [-1, -1]].forEach(([sx]) => { const ex = c[0] + ax * sx, ey = c[1] + ay * sx, b2 = an + (sx > 0 ? 0 : Math.PI); ctx.moveTo(ex, ey); ctx.lineTo(ex - 12 * Math.cos(b2 - .45), ey - 12 * Math.sin(b2 - .45)); ctx.moveTo(ex, ey); ctx.lineTo(ex - 12 * Math.cos(b2 + .45), ey - 12 * Math.sin(b2 + .45)); });
+        ctx.stroke(); ctx.restore();
+      }
+    }
     if (o.type === 'fill' && o.flow) { ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2.5; o.flow.forEach(g => { ctx.beginPath(); g.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); const a = g[g.length - 2] || g[0], b = g[g.length - 1], [bx, by] = toPX(b), [ax, ay] = toPX(a), an = Math.atan2(by - ay, bx - ax); ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an - .5), by - 10 * Math.sin(an - .5)); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an + .5), by - 10 * Math.sin(an + .5)); ctx.stroke(); }); ctx.restore(); }
     if (o.type === 'satin' || o.type === 'run') {
       ctx.beginPath(); o.points.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
@@ -181,10 +204,15 @@
   function nodeAt(o, k) { if (o.type !== 'fill') return { li: 0, pi: k }; for (let li = 0; li < o.paths.length; li++) { if (k < o.paths[li].length) return { li, pi: k }; k -= o.paths[li].length; } return null; }
 
   function drawDraft() {
-    if (stroke && stroke.length) {
+    if (stroke && stroke.length && tool === 'fill') {
+      ctx.save(); ctx.lineJoin = 'round'; ctx.beginPath();
+      stroke.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
+      ctx.fillStyle = hexA(currentColor, 0.35); ctx.fill(); ctx.strokeStyle = '#f2b134'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+    } else if (stroke && stroke.length) {
       ctx.save(); ctx.lineCap = ctx.lineJoin = 'round';
-      const wmm = brush.mode === 'line' || brush.mode === 'flow' ? 0 : brush.size;
-      ctx.strokeStyle = brush.mode === 'erase' ? 'rgba(255,255,255,.35)' : brush.mode === 'flow' ? '#4cc2ff' : hexA(currentColor, 0.55);
+      const isPick = tool === 'pick';
+      const wmm = isPick || brush.mode === 'line' || brush.mode === 'flow' ? 0 : brush.size;
+      ctx.strokeStyle = isPick ? '#4cc2ff' : brush.mode === 'erase' ? 'rgba(255,255,255,.35)' : brush.mode === 'flow' ? '#4cc2ff' : hexA(currentColor, 0.55);
       ctx.lineWidth = Math.max(2, wmm * view.s);
       ctx.beginPath(); stroke.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
       ctx.restore();
@@ -296,7 +324,10 @@
     }
     const p = toMM(e.offsetX, e.offsetY);
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
+    if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
+    if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
+    if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
     if (tool === 'select' && !preview) {
       const o = sel();
       if (o) {
@@ -324,7 +355,14 @@
       const mm = [(gesture.c[0] - gesture.v.x) / gesture.v.s, (gesture.c[1] - gesture.v.y) / gesture.v.s];
       view.s = s; view.x = c[0] - mm[0] * s; view.y = c[1] - mm[1] * s; draw(); return;
     }
-    if (gesture.type === 'brush' && stroke) {
+    if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
+    if (gesture.type === 'pickstroke' && stroke) {
+      if (!gesture.moved && Math.hypot(e.offsetX - gesture.start[0], e.offsetY - gesture.start[1]) > 8) gesture.moved = true;
+      const p = toMM(e.offsetX, e.offsetY), l = stroke[stroke.length - 1];
+      if (Math.hypot(p[0] - l[0], p[1] - l[1]) > 0.15) { stroke.push(p); if (gesture.moved) draw(); }
+      return;
+    }
+    if ((gesture.type === 'brush' || gesture.type === 'lasso') && stroke) {
       const p = toMM(e.offsetX, e.offsetY), l = stroke[stroke.length - 1];
       if (Math.hypot(p[0] - l[0], p[1] - l[1]) > 0.12) { stroke.push(p); draw(); }
       return;
@@ -356,6 +394,9 @@
     const g = gesture; gesture = null;
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
+    if (g.type === 'moveimg') { autosave(); if (window.__imgSheet) renderImageSheet(); return; }
+    if (g.type === 'lasso') { const st = stroke; stroke = null; finishLasso(st); return; }
+    if (g.type === 'pickstroke') { const st = stroke; stroke = null; if (!g.moved) pickTap(g.p); else pickDirection(st); return; }
     if (g.type === 'brush') { const st = stroke; stroke = null; if (st && st.length) finishBrush(st); else draw(); return; }
     if (!g.moved && g.type === 'tap') onTap(g.p);
   };
@@ -382,6 +423,7 @@
       renderSheet(); draw(); return;
     }
     if (tool === 'fill' && fillMode === 'quick') { quickDraw(p); return; }
+    if (tool === 'fill' && fillTrace === 'freehand') return;
     if (tool === 'fill') {
       if (!draft) draft = { type: 'fill', loops: [[]] };
       const l = draft.loops[draft.loops.length - 1];
@@ -400,12 +442,24 @@
     doc.objects.push(o); selId = o.id; selNode = -1; commit(); renderSheet(); draw();
     return o;
   }
+  function tracedFill(loops, name) {
+    const satin = pick.style === 'satin';
+    addObject({ type: 'fill', name, paths: loops, angle: 0, spacing: pick.density, stitchLen: satin ? 7 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: currentColor });
+    setTool('pick', true);
+    hint('Now swipe across it the way the thread should run');
+  }
+  function finishLasso(st) {
+    if (!st || st.length < 4) { draw(); return; }
+    let loop = T.simplify(st.map(q => [q[0], q[1]]), 0.12);
+    if (Math.abs(T.area(loop)) < 1) { toast('Trace all the way around the part you want'); draw(); return; }
+    tracedFill([loop], 'Traced ' + currentColor);
+  }
   function finishDraft() {
     if (!draft) return;
     if (draft.type === 'fill') {
       const loops = draft.loops.filter(l => l.length >= 3);
       if (!loops.length) { toast('A fill needs at least 3 points'); return; }
-      addObject({ type: 'fill', name: 'Fill', paths: loops, angle: 45, spacing: 0.4, stitchLen: 3.5, underlay: true, pullComp: 0.2 });
+      draft = null; tracedFill(loops, 'Traced ' + currentColor); return;
     } else if (draft.type === 'satin') {
       if (draft.points.length < (draft.rails ? 4 : 2)) { toast(draft.rails ? 'Tap at least 2 pairs of edge points' : 'A satin column needs at least 2 points'); return; }
       if (draft.rails && draft.points.length % 2) draft.points.pop();
@@ -476,7 +530,12 @@
   // ---------------- Quick Draw: tap a colour area of the picture to trace it
   let quickCache = null;
   function quickDraw(p) {
-    if (!bgImg || !doc.bg) { toast('Open an image first'); return; }
+    const r = traceColour(p, 'area', quickTol); if (!r) return;
+    addObject({ type: 'fill', name: 'Quick Draw', paths: r.loops, angle: 45, spacing: 0.4, stitchLen: 3.5, underlay: true, pullComp: 0.2, color: r.col });
+    setTool('fill', true); toast('Traced — tap another area, or Select to fine-tune');
+  }
+  function traceColour(p, scope, tolerance) {
+    if (!bgImg || !doc.bg) { toast('Open an image first (menu → Open image)'); return null; }
     const b = doc.bg;
     if (!quickCache || quickCache.img !== bgImg) {
       const sc = Math.min(1, 1100 / Math.max(bgImg.naturalWidth, bgImg.naturalHeight));
@@ -486,13 +545,17 @@
     }
     const { w, h, px } = quickCache;
     const x0 = Math.floor((p[0] - b.x) / b.w * w), y0 = Math.floor((p[1] - b.y) / b.h * h);
-    if (x0 < 0 || y0 < 0 || x0 >= w || y0 >= h) { toast('Tap inside the picture'); return; }
+    if (x0 < 0 || y0 < 0 || x0 >= w || y0 >= h) { toast('Tap inside the picture'); return null; }
     const i0 = (y0 * w + x0) * 4;
-    if (px[i0 + 3] < 128) { toast('That spot is transparent'); return; }
+    if (px[i0 + 3] < 128) { toast('That spot is transparent'); return null; }
     const ref = [px[i0], px[i0 + 1], px[i0 + 2]];
     const M = new Uint8Array(w * h), stk = [y0 * w + x0];
     let n = 0, sr = 0, sg = 0, sb = 0;
-    const tol = quickTol * 3;
+    const tol = tolerance * 3;
+    if (scope === 'colour') {
+      stk.length = 0;
+      for (let i = 0; i < w * h; i++) { const j = i * 4; if (px[j + 3] >= 128 && Math.abs(px[j] - ref[0]) + Math.abs(px[j + 1] - ref[1]) + Math.abs(px[j + 2] - ref[2]) <= tol) { M[i] = 1; n++; sr += px[j]; sg += px[j + 1]; sb += px[j + 2]; } }
+    }
     while (stk.length) {
       const i = stk.pop(); if (M[i]) continue;
       const j = i * 4;
@@ -501,17 +564,40 @@
       const x = i % w, y = (i - x) / w;
       if (x > 0) stk.push(i - 1); if (x < w - 1) stk.push(i + 1); if (y > 0) stk.push(i - w); if (y < h - 1) stk.push(i + w);
     }
-    if (n < 6) { toast('Area too small — raise the tolerance'); return; }
+    if (n < 6) { toast('Area too small — raise the tolerance'); return null; }
     // close pin-holes from anti-aliasing
     const L = new Int16Array(w * h); for (let i = 0; i < w * h; i++) L[i] = M[i] ? 1 : 0;
     const L2 = T.majority(L, w, h, 2);
     for (let i = 0; i < w * h; i++) M[i] = L2[i] === 1 ? 1 : 0;
     const mm = b.w / w;
     const loops = T.contours(M, w, h).map(l => T.simplify(l, 0.6)).filter(l => Math.abs(T.area(l)) * mm * mm > 1.0).map(l => l.map(q => [b.x + q[0] * mm, b.y + q[1] * mm]));
-    if (!loops.length) { toast('Nothing to trace there'); return; }
+    if (!loops.length) { toast('Nothing to trace there'); return null; }
     const col = '#' + [sr, sg, sb].map(v => Math.round(v / n).toString(16).padStart(2, '0')).join('');
-    addObject({ type: 'fill', name: 'Quick Draw', paths: loops, angle: 45, spacing: 0.4, stitchLen: 3.5, underlay: true, pullComp: 0.2, color: col });
-    setTool('fill', true); toast('Traced — tap another area, or Select to fine-tune');
+    return { loops, col };
+  }
+
+  // ---------------- Pick tool: tap a colour -> layer, swipe -> thread direction
+  function pickTap(p) {
+    busy(true);
+    setTimeout(() => {
+      const r = traceColour(p, pick.scope, pick.tol);
+      busy(false);
+      if (!r) return;
+      const satin = pick.style === 'satin';
+      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + r.col, paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 7 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: r.col });
+      hint('Now swipe across the shape the way the thread should run');
+    }, 20);
+  }
+  function pickDirection(st) {
+    const o = sel();
+    if (!o || o.type !== 'fill') { toast('Tap a colour first, then swipe'); draw(); return; }
+    if (!st || st.length < 2) { draw(); return; }
+    const a = st[0], b = st[st.length - 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L < 1) { draw(); return; }
+    let dev = 0; for (const q of st) dev = Math.max(dev, Math.abs((b[0] - a[0]) * (a[1] - q[1]) - (a[0] - q[0]) * (b[1] - a[1])) / L);
+    if (dev / L < 0.1) { delete o.flow; let ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI; if (ang > 90) ang -= 180; if (ang < -90) ang += 180; o.angle = Math.round(ang); toast('Thread direction ' + o.angle + '°'); }
+    else { o.flow = [simplifyOpen(st, 0.3).map(q => [q[0], q[1]])]; toast('Thread follows your curve'); }
+    commit(); renderSheet(); draw();
   }
 
   // ---------------- text (glyphs traced from the phone's fonts)
@@ -696,8 +782,9 @@
 
   function setTool(t, keepSel) {
     if (draft && t !== tool) draft = null;
-    tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush') selId = null;
-    document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+    if (t === 'fill' || t === 'satin' || t === 'run') drawKind = t;
+    tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush' && t !== 'pick') selId = null;
+    document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t || (b.dataset.tool === 'draw' && t === drawKind)));
     renderSheet(); draw();
   }
 
@@ -707,12 +794,58 @@
     if (preview) return renderPreviewSheet();
     if (tool === 'fill' || tool === 'satin' || tool === 'run') return renderDrawSheet();
     if (tool === 'brush') return renderBrushSheet();
+    if (tool === 'pick') return renderPickSheet();
     if (tool === 'text') return renderTextSheet(null);
     if (tool === 'auto') return renderAutoSheet();
     if (tool === 'layers') return renderLayers();
     const o = sel();
     if (!o) { sheet.innerHTML = ''; hint(doc.objects.length ? 'Tap a shape to edit it' : 'Open an image from the menu, then trace it or tap Auto'); return; }
     renderProps(o);
+  }
+
+  function renderPickSheet() {
+    const o = sel();
+    const step2 = o && o.type === 'fill';
+    hint(!bgImg ? 'Open an image first (menu → Open image)' : step2 ? 'Swipe across the shape to set the thread direction · tap another colour for the next layer' : 'Tap a colour in your picture');
+    const parts = ['<div class="sec"><h3>Pick colour → swipe direction</h3>',
+      `<div class="row"><label>Pick</label><div class="toggle" id="pkScope"><button data-v="area" class="${pick.scope === 'area' ? 'on' : ''}">Touching area</button><button data-v="colour" class="${pick.scope === 'colour' ? 'on' : ''}">Whole colour</button></div></div>`,
+      `<div class="row"><label>Stitch</label><div class="toggle" id="pkStyle"><button data-v="satin" class="${pick.style === 'satin' ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${pick.style !== 'satin' ? 'on' : ''}">Tatami</button></div></div>`,
+      densityPresets(step2 ? o : null),
+      slider('Tolerance', 'pkt', 5, 120, 1, pick.tol, '', v => pick.tol = v)];
+    if (step2) {
+      parts.push(`</div><div class="sec"><h3>${esc(o.name || 'Layer')} · ${o.flow ? 'curved flow' : (o.angle || 0) + '°'}</h3>`);
+      parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
+      parts.push(`<div class="btns" style="margin-top:10px">${o.flow ? btn('pkStraight', 'Make straight') : ''}${btn('pkNext', 'Next colour', 'primary')}${btn('pkDel', 'Delete layer', 'danger')}</div>`);
+    }
+    parts.push('<p class="small" style="margin:8px 0 0">Pick big background colours first and details last. One finger: tap = pick a colour, swipe = thread direction of the selected layer (select any layer in Layers to re-aim it). Two fingers: move/zoom.</p></div>');
+    mount(parts);
+    const tg = (id, fn) => $('#' + id).querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); }));
+    tg('pkScope', v => pick.scope = v);
+    tg('pkStyle', v => { pick.style = v; if (step2) { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 7 : 3.5; commit(); draw(); } });
+    $('#dPre').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.density = +b2.dataset.v; if (step2) { o.spacing = pick.density; commit(); draw(); } renderSheet(); }));
+    on('pkNext', () => { selId = null; renderSheet(); draw(); });
+    on('pkStraight', () => { delete o.flow; commit(); renderSheet(); draw(); });
+    on('pkDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
+  }
+
+  function renderImageSheet() {
+    window.__imgSheet = true;
+    if (!doc.bg) { mount([`<div class="sec"><h3>Image</h3><p class="small">No image yet.</p><div class="btns">${btn('iOpen', 'Open image', 'primary')}</div></div>`]); on('iOpen', () => $('#fImage').click()); return; }
+    const b = doc.bg;
+    const parts = [`<div class="sec"><h3>Image size (inches)</h3>
+      <div class="row"><label>Width</label><input type="number" id="iW" step="0.05" min="0.2" value="${inch(b.w)}"><span class="val">in</span></div>
+      <div class="row"><label>Height</label><input type="number" id="iH" step="0.05" min="0.2" value="${inch(b.h)}"><span class="val">in</span></div>
+      <p class="small" style="margin:0 0 6px">Proportions stay locked. Hoop: ${inch(hoop().w)} × ${inch(hoop().h)} in.</p>`,
+      slider('Image fade', 'iO', 0, 1, 0.05, doc.bgOpacity, '', v => { doc.bgOpacity = v; draw(); }),
+      `<div class="btns" style="margin-top:8px">${btn('iFit', 'Fit to hoop')}${btn('iCen', 'Center')}<button class="btn ${imgMove ? 'primary' : ''}" id="iMove">${imgMove ? 'Moving image — tap to stop' : 'Move image'}</button>${btn('iDone', 'Done')}</div></div>`];
+    mount(parts);
+    const setW = (wmm) => { const ar = b.h / b.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2; b.w = wmm; b.h = wmm * ar; b.x = cx - b.w / 2; b.y = cy - b.h / 2; doc.width = b.w; autosave(); draw(); };
+    $('#iW').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN); $('#iH').value = inch(b.h); } });
+    $('#iH').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN * b.w / b.h); $('#iW').value = inch(b.w); } });
+    on('iFit', () => { const h = hoop(), ar = b.h / b.w; let w = h.w * 0.94, hh = w * ar; if (hh > h.h * 0.94) { hh = h.h * 0.94; w = hh / ar; } b.w = w; b.h = hh; b.x = (h.w - w) / 2; b.y = (h.h - hh) / 2; autosave(); renderImageSheet(); draw(); });
+    on('iCen', () => { const h = hoop(); b.x = (h.w - b.w) / 2; b.y = (h.h - b.h) / 2; autosave(); draw(); });
+    on('iMove', () => { imgMove = !imgMove; renderImageSheet(); });
+    on('iDone', () => { imgMove = false; window.__imgSheet = false; renderSheet(); });
   }
 
   function renderBrushSheet() {
@@ -737,18 +870,25 @@
     const names = { fill: 'Fill area', satin: 'Satin column', run: 'Line (running stitch)' };
     const tips = { fill: 'Tap around the shape. Tap the first point to close it.', satin: 'Tap along the middle of the column. Set the width first.', run: 'Tap along the line.' };
     hint(tips[tool]);
-    const parts = [`<div class="sec"><h3>${names[tool]}</h3>`];
+    fillMode = 'points';
+    const parts = [`<div class="sec"><div class="toggle" id="dKind" style="display:flex;margin-bottom:8px">${[['fill', 'Fill'], ['satin', 'Satin'], ['run', 'Line']].map(([k, l]) => `<button data-v="${k}" class="${tool === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div><h3>${names[tool]}</h3>`];
     if (tool === 'fill') {
-      parts.push(`<div class="row"><label>Method</label><div class="toggle" id="fMode"><button data-v="points" class="${fillMode === 'points' ? 'on' : ''}">Tap points</button><button data-v="quick" class="${fillMode === 'quick' ? 'on' : ''}">Quick Draw</button></div></div>`);
-      if (fillMode === 'quick') { hint('Quick Draw: tap inside any colour area of the picture'); parts.push(slider('Tolerance', 'qt', 5, 120, 1, quickTol, '', v => quickTol = v)); }
+      if (fillTrace === 'freehand') hint('Pick a colour, then trace around the part with your finger');
+      parts.push(`<div class="row"><label>Trace</label><div class="toggle" id="fTrace"><button data-v="freehand" class="${fillTrace === 'freehand' ? 'on' : ''}">Freehand</button><button data-v="points" class="${fillTrace === 'points' ? 'on' : ''}">Tap points</button></div></div>`);
+      parts.push(`<div class="row"><label>Stitch</label><div class="toggle" id="fStyle"><button data-v="satin" class="${pick.style === 'satin' ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${pick.style !== 'satin' ? 'on' : ''}">Tatami</button></div></div>`);
+      parts.push(densityPresets(null));
     }
     if (tool === 'satin') parts.push(`<div class="row"><label>Method</label><div class="toggle" id="sMode"><button data-v="center" class="${satinMode === 'center' ? 'on' : ''}">Centre line</button><button data-v="rails" class="${satinMode === 'rails' ? 'on' : ''}">Point–counterpoint</button></div></div>`);
     if (tool === 'satin' && satinMode === 'rails') hint('Tap one edge, then the opposite edge, and keep alternating along the column');
     if (!(tool === 'fill' && fillMode === 'quick')) parts.push(colorPicker(currentColor, c => { currentColor = c; renderSheet(); }));
     if (tool === 'satin' && satinMode === 'center') parts.push(slider('Column width', 'sw', 0.8, 8, 0.1, doc.satinWidth, ' mm', (v) => { doc.satinWidth = v; if (draft && draft.points.length) draft.points[draft.points.length - 1][2] = v; draw(); }));
-    parts.push(`<div class="btns" style="margin-top:10px">${btn('dDone', 'Done', 'primary')}${tool === 'fill' ? btn('dHole', 'Add hole') : ''}${btn('dBack', 'Undo point')}${btn('dCancel', 'Cancel', 'danger')}</div></div>`);
-    if (tool === 'fill' && fillMode === 'quick') { parts.pop(); parts.push('</div>'); }
+    if (!(tool === 'fill' && fillTrace === 'freehand')) parts.push(`<div class="btns" style="margin-top:10px">${btn('dDone', 'Done', 'primary')}${tool === 'fill' ? btn('dHole', 'Add hole') : ''}${btn('dBack', 'Undo point')}${btn('dCancel', 'Cancel', 'danger')}</div></div>`);
+    if (tool === 'fill' && fillTrace === 'freehand') parts.push('</div>');
     mount(parts);
+    $('#dKind').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => setTool(b2.dataset.v)));
+    const ft = $('#fTrace'); if (ft) ft.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fillTrace = b2.dataset.v; draft = null; renderSheet(); draw(); }));
+    const fs = $('#fStyle'); if (fs) fs.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.style = b2.dataset.v; renderSheet(); }));
+    const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.density = +b2.dataset.v; renderSheet(); }));
     const fm = $('#fMode'); if (fm) fm.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fillMode = b2.dataset.v; draft = null; renderSheet(); draw(); }));
     const sm = $('#sMode'); if (sm) sm.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { satinMode = b2.dataset.v; draft = null; renderSheet(); draw(); }));
     on('dDone', finishDraft);
@@ -764,7 +904,9 @@
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
       parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
-      parts.push(slider('Density', 'den', 0.25, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
+      parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tLook"><button data-v="satin" class="${o.satinLook ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${!o.satinLook ? 'on' : ''}">Tatami</button></div></div>`);
+      parts.push(densityPresets(o));
+      parts.push(slider('Density', 'den', 0.15, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
       parts.push(slider('Stitch length', 'sl', 1.5, 7, 0.1, o.stitchLen || 3.5, ' mm', (v, f) => set('stitchLen', v, f)));
       parts.push(slider('Pull comp', 'pc', 0, 0.6, 0.01, o.pullComp == null ? 0.2 : o.pullComp, ' mm', (v, f) => set('pullComp', v, f)));
     }
@@ -776,7 +918,8 @@
       parts.push(slider(k >= 0 ? `Width (point ${k + 1})` : 'Width (all)', 'w', 0.6, 8, 0.1, w0, ' mm', (v, f) => { if (k >= 0) o.points[k][2] = v; else o.points.forEach(p => p[2] = v); draw(); if (f) commit(); }));
     }
     if (o.type === 'satin') {
-      parts.push(slider('Density', 'den', 0.2, 1, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
+      parts.push(densityPresets(o));
+      parts.push(slider('Density', 'den', 0.12, 1, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
       parts.push(slider('Pull comp', 'pc', 0, 0.5, 0.01, o.pullComp == null ? 0.15 : o.pullComp, ' mm', (v, f) => set('pullComp', v, f)));
     }
     if (o.type === 'run') {
@@ -790,7 +933,8 @@
       parts.push(slider('Letter height', 'ts', 4, 60, 0.5, o.size, ' mm', (v, f) => set('size', v, f)));
       parts.push(slider('Arch', 'ta', -100, 100, 1, o.bend || 0, '', (v, f) => set('bend', v, f)));
       parts.push(slider('Spacing', 'tl', -2, 6, 0.1, o.spacingLetters || 0, ' mm', (v, f) => set('spacingLetters', v, f)));
-      parts.push(slider('Density', 'den', 0.25, 0.8, 0.01, o.spacing || 0.38, ' mm', (v, f) => set('spacing', v, f)));
+      parts.push(densityPresets(o));
+      parts.push(slider('Density', 'den', 0.15, 0.8, 0.01, o.spacing || 0.38, ' mm', (v, f) => set('spacing', v, f)));
       parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tStyle"><button data-v="satin" class="${o.style !== 'fill' ? 'on' : ''}">Satin look</button><button data-v="fill" class="${o.style === 'fill' ? 'on' : ''}">Fill</button></div></div>`);
     }
     if (o.type !== 'run') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
@@ -800,6 +944,8 @@
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
+    tog('tLook', v => { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 7 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
+    const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { o.spacing = +b2.dataset.v; commit(); renderSheet(); draw(); }));
     const tt = $('#tText'); if (tt) { tt.addEventListener('input', () => { o.text = tt.value; layoutText(o); draw(); }); tt.addEventListener('change', () => commit()); }
     const tf = $('#tFont'); if (tf) tf.addEventListener('change', () => { o.font = +tf.value; layoutText(o); commit(); draw(); });
     on('pClearFlow', () => { delete o.flow; commit(); renderSheet(); draw(); });
@@ -812,6 +958,11 @@
       if (arr.length <= (o.type === 'fill' ? 3 : 2)) { toast('Too few points left'); return; }
       arr.splice(n.pi, 1); selNode = -1; commit(); renderSheet(); draw();
     });
+  }
+  const DENS = [['Standard', 0.40], ['Dense', 0.32], ['Extra dense', 0.25], ['Max', 0.18]];
+  function densityPresets(o) {
+    const cur = o ? (o.spacing || 0.4) : pick.density;
+    return `<div class="row"><label>Density</label><div class="toggle" id="dPre" style="flex:1;display:flex">${DENS.map(([l, v]) => `<button data-v="${v}" class="${Math.abs(cur - v) < 0.005 ? 'on' : ''}" style="flex:1;padding:8px 4px;font-size:13px">${l}</button>`).join('')}</div></div>`;
   }
   function move(o, d) {
     const i = doc.objects.indexOf(o), j = i + d; if (j < 0 || j >= doc.objects.length) return;
@@ -845,12 +996,13 @@
       slider('Thread colours', 'ac', 2, 14, 1, st.colors, '', v => st.colors = v),
       slider('Smallest detail', 'ad', 0.3, 3, 0.1, st.detail, ' mm', v => st.detail = v),
       `<div class="row"><label>Background</label><div class="toggle" id="aBg"><button data-v="1" class="${st.dropBg ? 'on' : ''}">Remove</button><button data-v="0" class="${!st.dropBg ? 'on' : ''}">Keep</button></div></div>`,
-      slider('Image size', 'aw', 20, Math.max(hoop().w, hoop().h), 1, doc.bg ? doc.bg.w : doc.width, ' mm wide', (v, f) => { if (!doc.bg) return; const ar = doc.bg.h / doc.bg.w; const cx = doc.bg.x + doc.bg.w / 2, cy = doc.bg.y + doc.bg.h / 2; doc.bg.w = v; doc.bg.h = v * ar; doc.bg.x = cx - v / 2; doc.bg.y = cy - doc.bg.h / 2; doc.width = v; draw(); if (f) autosave(); }),
+      `<div class="row"><label>Image size</label><span style="flex:1">${doc.bg ? inch(doc.bg.w) + ' × ' + inch(doc.bg.h) + ' in' : '—'}</span><button class="btn sm" id="aSize">Set inches</button></div>`,
       slider('Image fade', 'ao', 0, 1, 0.05, doc.bgOpacity, '', v => { doc.bgOpacity = v; draw(); }),
       `<div class="btns" style="margin-top:10px">${btn('aGo', 'Auto-digitize', 'primary')}${btn('aImg', 'Open image')}</div></div>`];
     mount(parts);
     $('#aBg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { st.dropBg = b.dataset.v === '1'; renderSheet(); }));
     on('aGo', () => autoDigitize(st));
+    on('aSize', () => renderImageSheet());
     on('aImg', () => $('#fImage').click());
   }
 
@@ -892,13 +1044,17 @@
     const parts = ['<div class="sec"><h3>Hoop</h3>', `<div class="row"><select id="hSel">${HOOPS.map((h, i) => `<option value="${i}" ${i === doc.hoop ? 'selected' : ''}>${h.name}</option>`).join('')}</select></div>`,
       `<div class="row"><label>Design name</label><input type="text" id="hName" value="${esc(doc.name)}"></div>`,
       '<h3 style="margin-top:14px">Resize whole design</h3>',
+      `<div class="row"><label>Width</label><input type="number" id="hWin" step="0.05" min="0.2" value="${(() => { const d = design(); return d.count ? inch(d.bounds[2] - d.bounds[0]) : ''; })()}"><span class="val">in</span></div>`,
       slider('Scale', 'hs', 25, 300, 1, 100, '%', () => {}),
       `<div class="btns">${btn('hApply', 'Apply scale', 'primary')}${btn('hClose', 'Close')}</div></div>`];
     mount(parts);
     $('#hSel').addEventListener('change', e => { doc.hoop = +e.target.value; autosave(); fit(); });
     $('#hName').addEventListener('change', e => { doc.name = e.target.value || 'Untitled'; $('#title').textContent = doc.name; autosave(); });
     on('hApply', () => {
-      const k = +$('#r_hs').value / 100; if (k === 1) return;
+      let k = +$('#r_hs').value / 100;
+      const wIn = parseFloat($('#hWin').value), d0 = design();
+      if (k === 1 && wIn > 0 && d0.count) k = wIn * IN / (d0.bounds[2] - d0.bounds[0]);
+      if (!k || Math.abs(k - 1) < 0.001) return;
       const h = hoop(), cx = h.w / 2, cy = h.h / 2, f = q => { q[0] = cx + (q[0] - cx) * k; q[1] = cy + (q[1] - cy) * k; };
       doc.objects.forEach(o => {
         if (o.type === 'fill') { o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f)); }
@@ -927,7 +1083,8 @@
   // ---------------- wiring
   document.querySelectorAll('#tools button').forEach(b => b.addEventListener('click', () => {
     if (preview) { preview = false; $('#bPreview').classList.remove('on'); }
-    setTool(b.dataset.tool);
+    imgMove = false; window.__imgSheet = false;
+    setTool(b.dataset.tool === 'draw' ? drawKind : b.dataset.tool);
   }));
   $('#bUndo').addEventListener('click', undo);
   $('#bRedo').addEventListener('click', redo);
@@ -949,6 +1106,7 @@
     if (a === 'vp3') exportFile('vp3');
     if (a === 'dst') exportFile('dst');
     if (a === 'size') { preview = false; renderSizeSheet(); }
+    if (a === 'imgsize') { preview = false; $('#bPreview').classList.remove('on'); renderImageSheet(); }
     if (a === 'help') renderHelp();
     if (a === 'save') {
       const data = JSON.stringify(Object.assign({ app: 'StitchStudio', v: 1 }, doc));

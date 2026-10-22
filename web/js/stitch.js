@@ -234,6 +234,12 @@
   function fillObject(o) {
     const loops = o.paths || [];
     const pieces = [];
+    // satin-look layers get an edge-walk underlay so the outline sews crisp
+    if (o.satinLook && o.underlay !== false) loops.forEach(l => {
+      if (l.length < 3) return;
+      let per = 0; for (let i = 0; i < l.length; i++) per += hyp(l[i], l[(i + 1) % l.length]);
+      if (per > 2.5) pieces.push({ pts: resamplePolyline(l, 1.5, true), kind: 'underlay' });
+    });
     if (o.flow && o.flow.length) {
       if (o.underlay !== false) tatami(loops, { angle: 0, spacing: 2.2, stitchLen: 3.0, pullComp: 0, inset: 0.5 }).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'underlay' }); });
       flowFill(loops, o).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'top' }); });
