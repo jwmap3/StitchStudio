@@ -22,8 +22,7 @@ jobs:
         with: { gradle-version: '8.7' }
       - name: Build APK
         working-directory: android
-        env: { BUILD_NUMBER: '${{ github.run_number }}' }
-        run: gradle :app:assembleRelease --no-daemon --stacktrace
+        run: BUILD_NUMBER=$(( ${{ github.run_number }} + 100 )) gradle :app:assembleRelease --no-daemon --stacktrace
       - run: cp android/app/build/outputs/apk/release/app-release.apk StitchStudio.apk
       - uses: actions/upload-artifact@v4
         with: { name: apk, path: StitchStudio.apk }
@@ -65,7 +64,7 @@ jobs:
           ls -la out
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest out/StitchStudio.apk out/StitchStudio-Setup.exe out/StitchStudio-Portable.exe \
-            --title "Stitch Studio (build ${{ github.run_number }})" \
+            --title "Stitch Studio (build $(( ${{ github.run_number }} + 100 )))" \
             --notes "Phone: StitchStudio.apk. PC: StitchStudio-Setup.exe (installs with a Start-menu shortcut) or StitchStudio-Portable.exe (runs without installing). Build ${{ github.run_number }}."
 
   pages:
