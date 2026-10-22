@@ -18,6 +18,15 @@
     { id: 'small100', name: 'Small square', w: 100, h: 100, tag: 'Optional (4 × 4 in)' },
     { id: 'custom', name: 'Custom size', w: 150, h: 150, tag: 'Up to 360 × 200 mm' },
   ];
+  // full thread chart: common 40 wt embroidery thread shades (generic names)
+  const CHART = [
+    ['#ffffff','White'],['#f4f1e8','Eggshell'],['#e8dcc0','Ivory'],['#d9c7a1','Cream'],['#c8b48a','Khaki'],['#a68a5b','Tan'],['#8a6a3e','Light brown'],['#6b4a2b','Brown'],['#4a3020','Dark brown'],['#2e1e14','Chocolate'],
+    ['#fff200','Lemon'],['#ffd23f','Sunflower'],['#f2c12e','Yellow gold'],['#f2a900','Gold'],['#d49b2a','Old gold'],['#b8862b','Antique gold'],['#ffb347','Light orange'],['#f28c28','Orange'],['#e35205','Burnt orange'],['#c4441c','Rust'],
+    ['#ff8a80','Coral'],['#f45b5b','Salmon'],['#e8112d','Bright red'],['#c8102e','Red'],['#a6192e','Cardinal'],['#8b0f14','Maroon'],['#6d0f1a','Burgundy'],['#4a0d14','Oxblood'],['#f8c8d8','Baby pink'],['#f4a6c1','Pink'],
+    ['#e5007e','Hot pink'],['#b5175b','Raspberry'],['#d8b4e2','Lavender'],['#9b59b6','Orchid'],['#6a2c91','Purple'],['#4b1d6b','Dark purple'],['#c6e2f5','Ice blue'],['#89c4f4','Sky blue'],['#3a8fd9','Medium blue'],['#2648a8','Royal blue'],
+    ['#1f3a93','Blue'],['#0b2a5b','Navy'],['#0a1a33','Midnight'],['#00a3ad','Teal'],['#007a78','Dark teal'],['#7fd6c4','Mint'],['#a8e05f','Lime'],['#6abf4b','Kelly green'],['#2e7d32','Green'],['#1b4d2b','Forest'],
+    ['#556b2f','Olive'],['#3d4a26','Army green'],['#e0e0e0','Silver gray'],['#c0c0c0','Light gray'],['#9e9e9e','Gray'],['#7a7a7a','Pewter'],['#5a5a5a','Charcoal'],['#3a3a3a','Dark charcoal'],['#1e1e1e','Off black'],['#000000','Black']];
+  const nearestThread = hex => { const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; let best = CHART[0], bd = Infinity; for (const c of CHART) { const m = parseInt(c[0].slice(1), 16), dr = (m >> 16 & 255) - r, dg = (m >> 8 & 255) - g, db = (m & 255) - b, rm = (r + (m >> 16 & 255)) / 2; const d = (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db; if (d < bd) { bd = d; best = c; } } return best; };
   const THREADS = ['#000000', '#ffffff', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#e35205', '#8a5a2b', '#5c3a1e', '#1f3a93', '#0b2a5b', '#2e7d32', '#6abf4b', '#7a7a7a', '#c0c0c0', '#f4a6c1', '#6a2c91', '#00a3ad'];
   let doc = newDoc();
   let tool = 'select', selId = null, selNode = -1, preview = false, progress = 1;
@@ -715,7 +724,7 @@
     setTimeout(() => {
       try {
         const b = doc.bg;
-        const maxPx = 700;
+        const maxPx = { normal: 700, high: 1000, max: 1400 }[opts.quality || 'normal'];
         const sc = Math.min(1, maxPx / Math.max(bgImg.naturalWidth, bgImg.naturalHeight));
         const w = Math.max(8, Math.round(bgImg.naturalWidth * sc)), h = Math.max(8, Math.round(bgImg.naturalHeight * sc));
         const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
@@ -744,7 +753,7 @@
           }
         }
         const K = opts.colors;
-        const C = T.kmeans(px, n, K, mask);
+        let C = T.kmeans(px, n, K, mask);
         let L = T.assign(px, n, C, mask);
         L = T.majority(L, w, h, C.length); L = T.majority(L, w, h, C.length);
         const mmPerPx = b.w / w;
@@ -755,21 +764,61 @@
         const order = C.map((_, k) => k).filter(k => areas[k] > 0).sort((a, b2) => areas[b2] - areas[a]);
         const rank = new Int16Array(C.length); order.forEach((k, r) => rank[k] = r);
         const ANG = [45, -45, 0, 90, 30, -60, 15, -30];
-        const made = [];
-        order.forEach((k, r) => {
+        const made = [], outlines = [];
+        const pcaAngle = loops => { let sx = 0, sy = 0, n2 = 0; loops.forEach(l => l.forEach(q => { sx += q[0]; sy += q[1]; n2++; })); const mx = sx / n2, my = sy / n2; let a = 0, b2 = 0, c = 0; loops.forEach(l => l.forEach(q => { const dx = q[0] - mx, dy = q[1] - my; a += dx * dx; b2 += dx * dy; c += dy * dy; })); return 0.5 * Math.atan2(2 * b2, a - c) * 180 / Math.PI; };
+        const perim = loops => loops.reduce((t, l) => t + l.reduce((u, q, i2) => u + Math.hypot(q[0] - l[(i2 + 1) % l.length][0], q[1] - l[(i2 + 1) % l.length][1]), 0), 0);
+        // group colour clusters that land on the same thread
+        const colOf = k => '#' + C[k].map(v => v.toString(16).padStart(2, '0')).join('');
+        const groups = [];
+        order.forEach(k => {
+          let col = colOf(k), nm = null;
+          if (opts.snap !== false) { const t = nearestThread(col); col = t[0]; nm = t[1]; }
+          let g2 = groups.find(x => x.col === col);
+          if (!g2) { g2 = { col, nm: nm || ('Auto colour ' + (groups.length + 1)), ks: [] }; groups.push(g2); }
+          g2.ks.push(k);
+        });
+        const grank = new Int16Array(C.length); groups.forEach((g2, r) => g2.ks.forEach(k => grank[k] = r));
+        // chamfer distance transform (half-width of a shape, in px)
+        const dist = M => { const D = new Float32Array(n); for (let i = 0; i < n; i++) D[i] = M[i] ? 1e9 : 0;
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x) v = Math.min(v, D[i - 1] + 1); if (y) v = Math.min(v, D[i - w] + 1); if (x && y) v = Math.min(v, D[i - w - 1] + 1.414); if (y && x < w - 1) v = Math.min(v, D[i - w + 1] + 1.414); D[i] = v; }
+          for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x < w - 1) v = Math.min(v, D[i + 1] + 1); if (y < h - 1) v = Math.min(v, D[i + w] + 1); if (x < w - 1 && y < h - 1) v = Math.min(v, D[i + w + 1] + 1.414); if (y < h - 1 && x) v = Math.min(v, D[i + w - 1] + 1.414); D[i] = v; }
+          return D; };
+        const outlineLines = [];
+        groups.forEach((g2, r) => {
           let M = new Uint8Array(n);
-          for (let i = 0; i < n; i++) M[i] = L[i] === k ? 1 : 0;
+          for (let i = 0; i < n; i++) M[i] = L[i] >= 0 && grank[L[i]] === r ? 1 : 0;
+          // how wide are the thick parts? (95th percentile of the half-width over the area)
+          const D = dist(M); const vals = []; for (let i = 0; i < n; i += 3) if (M[i]) vals.push(D[i]);
+          vals.sort((a, b3) => a - b3); const wide = vals.length ? 2 * vals[Math.floor(vals.length * 0.99)] * mmPerPx : 0;
           // underlap: tuck under colours sewn later
-          const D = T.dilate(M, w, h, 1);
-          for (let i = 0; i < n; i++) if (D[i] && !M[i] && L[i] >= 0 && rank[L[i]] > r) M[i] = 1;
-          const loops = T.contours(M, w, h).map(l => T.simplify(l, 0.7)).filter(l => Math.abs(T.area(l)) * mmPerPx * mmPerPx > 0.3)
+          const Dl = T.dilate(M, w, h, 1);
+          for (let i = 0; i < n; i++) if (Dl[i] && !M[i] && L[i] >= 0 && grank[L[i]] > r) M[i] = 1;
+          const loops = T.contours(M, w, h).map(l => T.simplify(l, opts.smooth || 0.7)).filter(l => Math.abs(T.area(l)) * mmPerPx * mmPerPx > 0.3)
             .map(l => l.map(q => [b.x + q[0] * mmPerPx, b.y + q[1] * mmPerPx]));
           if (!loops.length) return;
-          const col = '#' + C[k].map(v => v.toString(16).padStart(2, '0')).join('');
-          made.push({ type: 'fill', name: 'Auto colour ' + (r + 1), paths: loops, angle: ANG[r % ANG.length], spacing: 0.4, stitchLen: 3.5, underlay: true, pullComp: 0.2, color: col });
+          // satin shine where the parts are narrow enough for clean satin (< 7 mm); tatami for big areas
+          const satin = opts.style === 'satin' || (opts.style === 'mixed' && wide < 7);
+          const long = pcaAngle(loops);
+          let angle = opts.dir === 'fixed' ? opts.angle : opts.dir === 'varied' ? ANG[r % ANG.length] : (satin ? long + 90 : long + 45);
+          angle = ((Math.round(angle) + 90) % 180 + 180) % 180 - 90;
+          const dens = opts.density || 0.4;
+          made.push({ type: 'fill', name: g2.nm + (satin ? ' · satin' : ' · tatami'), paths: loops, angle, spacing: satin ? dens : Math.max(dens, 0.3), stitchLen: satin ? 12 : 3.5, underlay: opts.underlay !== false, pullComp: opts.pull == null ? 0.2 : opts.pull, satinLook: satin, color: g2.col, auto: true });
+          if (opts.outline && opts.outline !== 'none') loops.forEach(l => { if (perim([l]) > 6) outlineLines.push(l); });
         });
-        made.forEach(o => { o.id = doc.nextId++; doc.objects.push(o); });
-        selId = null; commit(); renderSheet(); toast(`Created ${made.length} colour layers — tap any to fine-tune`);
+        if (outlineLines.length) {
+          const lines = outlineLines.map(l => {
+            const R = S.resamplePolyline(l, 2.0, true);
+            if (opts.outline !== 'bean') return R;
+            const o2 = [R[0]]; for (let i = 1; i < R.length; i++) o2.push(R[i], R[i - 1], R[i]); return o2;
+          });
+          // nearest-neighbour order to keep trims down
+          const ordered = []; let cur = null; const left = lines.slice();
+          while (left.length) { let bi = 0, bd = Infinity; if (cur) left.forEach((l, i) => { const d = Math.hypot(l[0][0] - cur[0], l[0][1] - cur[1]); if (d < bd) { bd = d; bi = i; } }); const l = left.splice(bi, 1)[0]; ordered.push(l); cur = l[l.length - 1]; }
+          outlines.push({ type: 'stitches', name: 'Outline (' + (opts.outline === 'bean' ? 'bold' : 'thin') + ')', lines: ordered, color: opts.outlineColor || '#000000', auto: true });
+        }
+        if (opts.replace) doc.objects = doc.objects.filter(o => !o.auto);
+        made.concat(outlines).forEach(o => { o.id = doc.nextId++; doc.objects.push(o); });
+        selId = null; commit(); renderSheet(); toast(`Created ${made.length} thread layers${outlines.length ? ' + outline' : ''} — tap any to fine-tune`);
       } catch (e) { console.error(e); toast('Auto-digitize failed: ' + e.message); }
       busy(false); draw();
     }, 30);
@@ -831,10 +880,13 @@
   const fmt = (v, step) => step >= 1 ? String(Math.round(v)) : (+v).toFixed(step >= 0.1 ? 1 : 2);
   function colorPicker(cur, onPick) {
     const id = 'cp' + Math.random().toString(36).slice(2, 7);
-    const html = `<div class="swatches" id="${id}">${THREADS.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span></div>`;
+    const html = `<div class="swatches" id="${id}">${THREADS.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span><button class="btn sm" data-more="1" style="border-radius:999px">All ${CHART.length} threads ▾</button></div><div class="swatches" id="${id}x" style="display:none;margin-top:8px">${CHART.map(([c, nm]) => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px" aria-label="${nm}" title="${nm}"></button>`).join('')}</div>`;
     return { html, bind: () => {
       const box = $('#' + id);
       box.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => onPick(b.dataset.c)));
+      const xb = $('#' + id + 'x');
+      xb.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { onPick(b.dataset.c); toast(b.title); }));
+      box.querySelector('[data-more]').addEventListener('click', e => { const open = xb.style.display === 'none'; xb.style.display = open ? 'flex' : 'none'; e.target.textContent = open ? 'Fewer ▴' : `All ${CHART.length} threads ▾`; });
       box.querySelector('input').addEventListener('change', e => onPick(e.target.value));
     } };
   }
@@ -1065,21 +1117,45 @@
   }
 
   function renderAutoSheet() {
-    const st = renderAutoSheet.st || (renderAutoSheet.st = { colors: 6, detail: 0.6, dropBg: true });
-    const parts = ['<div class="sec"><h3>Auto-digitize the image</h3>',
-      '<p class="small" style="margin:0 0 6px">Turns the picture into fill layers, one per thread colour. Then tap any layer to fix angles, density or shape by hand.</p>',
-      slider('Thread colours', 'ac', 2, 14, 1, st.colors, '', v => st.colors = v),
-      slider('Smallest detail', 'ad', 0.3, 3, 0.1, st.detail, ' mm', v => st.detail = v),
-      `<div class="row"><label>Background</label><div class="toggle" id="aBg"><button data-v="1" class="${st.dropBg ? 'on' : ''}">Remove</button><button data-v="0" class="${!st.dropBg ? 'on' : ''}">Keep</button></div></div>`,
+    const st = renderAutoSheet.st || (renderAutoSheet.st = { colors: 6, detail: 0.6, dropBg: true, style: 'mixed', density: 0.32, dir: 'shape', angle: 45, underlay: true, pull: 0.2, snap: true, outline: 'none', outlineColor: '#000000', quality: 'high', smooth: 0.7, replace: true, opacity: 1 });
+    const tg = (id, label, val, opts) => `<div class="row"><label>${label}</label><div class="toggle" id="${id}" style="flex:1;display:flex">${opts.map(([v, l]) => `<button data-v="${v}" class="${String(val) === String(v) ? 'on' : ''}" style="flex:1;padding:8px 4px;font-size:13px">${l}</button>`).join('')}</div></div>`;
+    const parts = ['<div class="sec"><h3>Auto-digitize</h3>',
+      '<p class="small" style="margin:0 0 6px">Turns the picture into stitch layers, one per thread colour. Tap any layer afterwards to fine-tune it by hand.</p>',
       `<div class="row"><label>Image size</label><span style="flex:1">${doc.bg ? inch(doc.bg.w) + ' × ' + inch(doc.bg.h) + ' in' : '—'}</span><button class="btn sm" id="aSize">Set inches</button></div>`,
+      `<div class="btns" style="margin:6px 0 2px">${btn('aGo', 'Auto-digitize', 'primary')}${btn('aImg', 'Open image')}</div></div>`,
+      '<div class="sec"><h3>Colours</h3>',
+      slider('Thread colours', 'ac', 2, 24, 1, st.colors, '', v => st.colors = v),
+      tg('aSnap', 'Match to', st.snap ? 1 : 0, [[1, 'Thread chart'], [0, 'Exact image']]),
+      tg('aBg', 'Background', st.dropBg ? 1 : 0, [[1, 'Remove'], [0, 'Keep']]),
+      '</div><div class="sec"><h3>Stitch look</h3>',
+      tg('aStyle', 'Style', st.style, [['mixed', 'Mixed'], ['satin', 'Satin shine'], ['tatami', 'Tatami']]),
+      '<p class="small" style="margin:0 0 4px">Mixed = satin shine on narrow parts and lettering, tatami on big areas (how pros do it).</p>',
+      tg('aDen', 'Density', st.density, [[0.4, 'Standard'], [0.32, 'Dense'], [0.25, 'Extra'], [0.18, 'Max']]),
+      tg('aDir', 'Direction', st.dir, [['shape', 'Follow shape'], ['fixed', 'One angle'], ['varied', 'Varied']])];
+    if (st.dir === 'fixed') parts.push(slider('Angle', 'aAng', -90, 90, 1, st.angle, '°', v => st.angle = v));
+    parts.push(tg('aUnder', 'Underlay', st.underlay ? 1 : 0, [[1, 'On'], [0, 'Off']]),
+      slider('Pull comp', 'aPull', 0, 0.5, 0.01, st.pull, ' mm', v => st.pull = v),
+      '</div><div class="sec"><h3>Outline</h3>',
+      tg('aOut', 'Outline', st.outline, [['none', 'None'], ['run', 'Thin'], ['bean', 'Bold']]),
+      '<p class="small" style="margin:0 0 4px">Outlines every colour edge. Best for simple logos and lettering; leave off for detailed artwork.</p>');
+    if (st.outline !== 'none') parts.push(colorPicker(st.outlineColor, c => { st.outlineColor = c; renderSheet(); }));
+    parts.push('</div><div class="sec"><h3>Detail</h3>',
+      tg('aQ', 'Quality', st.quality, [['normal', 'Normal'], ['high', 'High'], ['max', 'Max']]),
+      slider('Smallest detail', 'ad', 0.3, 3, 0.1, st.detail, ' mm', v => st.detail = v),
+      slider('Edge smoothing', 'asm', 0.3, 2, 0.1, st.smooth, '', v => st.smooth = v),
+      tg('aRep', 'Re-run', st.replace ? 1 : 0, [[1, 'Replace last auto'], [0, 'Add on top']]),
       slider('Image fade', 'ao', 0, 1, 0.05, doc.bgOpacity, '', v => { doc.bgOpacity = v; draw(); }),
-      `<div class="btns" style="margin-top:10px">${btn('aGo', 'Auto-digitize', 'primary')}${btn('aImg', 'Open image')}</div></div>`];
+      `<div class="btns" style="margin-top:10px">${btn('aGo2', 'Auto-digitize', 'primary')}</div></div>`);
     mount(parts);
-    $('#aBg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { st.dropBg = b.dataset.v === '1'; renderSheet(); }));
-    on('aGo', () => autoDigitize(st));
+    const bindT = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); })); };
+    bindT('aSnap', v => st.snap = v === '1'); bindT('aBg', v => st.dropBg = v === '1'); bindT('aStyle', v => st.style = v);
+    bindT('aDen', v => st.density = +v); bindT('aDir', v => st.dir = v); bindT('aUnder', v => st.underlay = v === '1');
+    bindT('aOut', v => st.outline = v); bindT('aQ', v => st.quality = v); bindT('aRep', v => st.replace = v === '1');
+    on('aGo', () => autoDigitize(st)); on('aGo2', () => autoDigitize(st));
     on('aSize', () => renderImageSheet());
     on('aImg', () => $('#fImage').click());
   }
+
 
   function renderLayers() {
     if (!doc.objects.length) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }

@@ -19,6 +19,7 @@
     const out = [];
     for (let v = 0; v < VAR.length; v++) for (let b = 0; b < BUCKETS; b++) {
       const base = scale(base0, VAR[v]), L = lum(base);
+      const k = 0.18 + 0.82 * Math.min(1, lum(base0) * 1.6);   // dark threads get a much subtler sheen
       const ang = (b + 0.5) / BUCKETS * Math.PI;
       const s = Math.abs(Math.sin(ang - LIGHT));              // 1 = stitch lies across the light
       const f = 0.74 + 0.36 * s;
@@ -26,12 +27,12 @@
       out.push({
         edge: css(scale(base, 0.42 + 0.08 * s)),               // where the thread dives into the fabric
         body: css(scale(base, f * 0.86)),                      // thread body
-        mid: css(mix(scale(base, f), [255, 245, 225], 0.06 + 0.10 * s)),   // rounded crown
-        c1: css(mix(scale(base, f * 1.04), [255, 248, 230], 0.16 + 0.12 * s), 0.85),   // centre light, outer
-        c2: css(mix(scale(base, f * 1.08), [255, 250, 236], 0.30 + 0.16 * s), 0.8),    // centre light, inner
-        c3: css(mix(scale(base, f * 1.1), [255, 252, 244], 0.52 + 0.18 * s), 0.55 + 0.3 * s), // hottest streak
+        mid: css(mix(scale(base, f), [255, 245, 225], (0.06 + 0.10 * s) * k)),   // rounded crown
+        c1: css(mix(scale(base, f * 1.04), [255, 248, 230], (0.16 + 0.12 * s) * k), 0.85),   // centre light, outer
+        c2: css(mix(scale(base, f * 1.08), [255, 250, 236], (0.30 + 0.16 * s) * k), 0.8),    // centre light, inner
+        c3: css(mix(scale(base, f * 1.1), [255, 252, 244], (0.52 + 0.18 * s) * k), 0.55 + 0.3 * s), // hottest streak
         ply: css(scale(base, 0.62 + 0.1 * s), 0.55),           // twist grooves
-        hi: css(mix(scale(base, f), [255, 250, 235], 0.6), hiA) // specular glint
+        hi: css(mix(scale(base, f), [255, 250, 235], 0.6 * k), hiA) // specular glint
       });
     }
     return out;

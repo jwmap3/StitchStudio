@@ -15,7 +15,8 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Hoops (Designer Topaz 30)**: tap the hoop button on the canvas. Splendid Square 120×120 and Royal 360×200 (included), Crown 260×200, Jewel 240×150, metal 180×130, 100×100, or a custom size up to the machine's 360×200 mm field; landscape/portrait; fit warnings.
 - **Inches**: inch grid and rulers, image and design size set in inches (menu).
 - **Text**: lettering with arch, satin-look or fill.
-- **Auto**: one-tap auto-digitize into colour layers.
+- **Auto**: auto-digitize into thread layers with options: 2–24 colours matched to a 60-colour thread chart (or exact image colours), stitch style Mixed / Satin shine / Tatami, density presets, direction (follow shape / one angle / varied), underlay, pull comp, optional thin or bold outline in any colour, quality, detail and edge smoothing, replace-or-add on re-run.
+- **Thread chart**: every colour picker has 'All 60 threads' with names.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.
 - **Realistic thread view** while you edit (sheen by stitch direction, shadows, fabric texture; toggle in the header) and **Preview** with sew-out slider, fabric colours, stitch count, trims, colours, time.
 
