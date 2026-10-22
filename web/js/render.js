@@ -57,11 +57,14 @@
       let P, used = 0;
       const NB = BUCKETS * VAR.length; const mk = () => { const a = []; for (let b = 0; b < NB; b++) a.push(new Path2D()); return a; };
       const reset = () => { P = { full: mk(), body: mk(), mid: mk(), c1: mk(), c2: mk(), c3: mk(), hi: mk(), shadow: new Path2D() }; used = 0; };
+      const lod = w < 1.3 ? 0 : w < 2.4 ? 1 : 2;   // 0 = overview, 1 = medium, 2 = full thread detail
       const flush = () => {
         if (!used) return;
         ctx.lineCap = 'round';
+        if (lod === 0) { for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].body; ctx.lineWidth = w * 1.05; ctx.stroke(P.full[b]); } reset(); return; }
         ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = w * 1.15; ctx.stroke(P.shadow);
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].edge; ctx.lineWidth = w; ctx.stroke(P.full[b]); }
+        if (lod === 1) { for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].mid; ctx.lineWidth = w * 0.62; ctx.stroke(P.body[b]); } reset(); return; }
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].body; ctx.lineWidth = w * 0.72; ctx.stroke(P.body[b]); }
         for (let b = 0; b < NB; b++) { ctx.strokeStyle = sd[b].mid; ctx.lineWidth = w * 0.5; ctx.stroke(P.mid[b]); }
         // light down the centre of the column: brighter, narrower bands toward the middle of each stitch
@@ -74,7 +77,7 @@
       reset();
       for (const ln of layer.lines) {
         if (budget <= 0) break;
-        if (used > 500) flush();
+        if (used > (lod === 0 ? 4000 : 500)) flush();
         for (let i = 1; i < ln.length; i++) {
           if (budget-- <= 0) break;
           const a = ln[i - 1], c = ln[i];
@@ -85,7 +88,9 @@
           const h = (Math.imul(i + 1, 2654435761) ^ Math.imul(ln.length + 7, 40503)) >>> 0; const b = (h % 3) * BUCKETS + Math.min(BUCKETS - 1, Math.floor(ang / Math.PI * BUCKETS));
           const len = Math.sqrt(L2), e = Math.min(0.35, w * 0.55 / len);   // end darkening scales with thread width
           P.full[b].moveTo(x0, y0); P.full[b].lineTo(x1, y1);
+          if (lod === 0) { used++; continue; }
           inset(P.body[b], x0, y0, x1, y1, e * 0.5);
+          if (lod === 1) { P.shadow.moveTo(x0 + sh, y0 + sh * 1.3); P.shadow.lineTo(x1 + sh, y1 + sh * 1.3); used++; continue; }
           inset(P.mid[b], x0, y0, x1, y1, Math.min(0.4, e * 1.2 + 0.08));
           // centre band: only on stitches long enough to read as a column (satin), with a little natural jitter
           if (len > w * 2.5) {

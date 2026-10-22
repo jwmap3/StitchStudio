@@ -3,7 +3,7 @@
   'use strict';
   const S = window.Stitch, T = window.Trace;
   const $ = s => document.querySelector(s);
-  const cv = $('#cv'), ctx = cv.getContext('2d');
+  const cv = $('#cv'); let ctx = cv.getContext('2d');
   const sheet = $('#sheet');
 
   // ---------------- state
@@ -76,7 +76,9 @@
   // ---------------- persistence + undo
   const snapshot = () => JSON.stringify({ objects: doc.objects, nextId: doc.nextId });
   function commit() {
-    undoStack.push(lastSnap); if (undoStack.length > 60) undoStack.shift();
+    undoStack.push(lastSnap);
+    let total = undoStack.reduce((t, x) => t + x.length, 0);
+    while (undoStack.length > 1 && (undoStack.length > 60 || total > 40e6)) total -= undoStack.shift().length;
     redoStack.length = 0; lastSnap = snapshot(); autosave(); updateUndo();
   }
   let lastSnap = snapshot();
@@ -84,7 +86,9 @@
   function undo() { if (!undoStack.length) return; redoStack.push(lastSnap); restore(undoStack.pop()); }
   function redo() { if (!redoStack.length) return; undoStack.push(lastSnap); restore(redoStack.pop()); }
   function updateUndo() { $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
-  function autosave() {
+  let saveT = 0;
+  function autosave() { clearTimeout(saveT); saveT = setTimeout(autosaveNow, 700); }
+  function autosaveNow() {
     try { localStorage.setItem('ss_doc', JSON.stringify(doc)); }
     catch (e) { try { const d = Object.assign({}, doc, { bg: null }); localStorage.setItem('ss_doc', JSON.stringify(d)); } catch (e2) {} }
   }
@@ -98,7 +102,7 @@
   // ---------------- view
   let lastSize = null;
   function resize() {
-    const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
     // keep what was in the middle of the screen in the middle when the panel opens/closes
     if (lastSize && (lastSize[0] !== r.width || lastSize[1] !== r.height)) {
       view.x += (r.width - lastSize[0]) / 2; view.y += (r.height - lastSize[1]) / 2;
@@ -120,8 +124,19 @@
   const toPX = (p) => [p[0] * view.s + view.x, p[1] * view.s + view.y];
 
   // ---------------- stitches per object (cached)
+  const GEO = { paths: 1, points: 1, lines: 1, flow: 1, glyphs: 1, blocks: 1, __p: 1 };
+  function geoHash(v, h) {
+    if (Array.isArray(v)) { h = (h * 31 + v.length) % 2147483647; for (let i = 0; i < v.length; i++) { const e = v[i]; h = typeof e === 'number' ? (h * 33 + Math.round(e * 1000) * (i + 7)) % 2147483647 : geoHash(e, h); } return h; }
+    if (v && typeof v === 'object') { for (const k in v) h = geoHash(v[k], (h * 7 + k.length) % 2147483647); return h; }
+    return typeof v === 'number' ? (h * 33 + Math.round(v * 1000)) % 2147483647 : h;
+  }
+  function sig(o) {
+    let props = '', g = 17;
+    for (const k in o) { if (GEO[k]) g = geoHash(o[k], g); else props += k + ':' + JSON.stringify(o[k]) + ';'; }
+    return props + '#' + g;
+  }
   function pieces(o) {
-    const key = JSON.stringify(o);
+    const key = sig(o);
     const c = cache.get(o.id);
     if (c && c.key === key) return c.pieces;
     let p = [];
@@ -157,8 +172,67 @@
     return `rgb(${r | 0},${g | 0},${b | 0})`;
   }
   let raf = 0;
-  function draw() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; drawNow(); }); }
+  let navFast = false, navT = 0;                // panning/zooming: reuse last frame
+  const frame = { c: document.createElement('canvas'), view: null, ok: false };
+  let lastView = null;
+  function drawNav() {                            // called by pan / pinch / wheel
+    if (!navFast && lastView && dragId == null) keepFrame();   // snapshot the last full frame once, when navigation starts
+    navFast = true; clearTimeout(navT);
+    navT = setTimeout(() => { navFast = false; draw(); }, 140);
+    draw();
+  }
+  function draw() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
+  function drawFromFrame() {
+    const r = cv.getBoundingClientRect(), dpr = cv.width / r.width, f = frame.view, k = view.s / f.s;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * (view.x - f.x * k), dpr * (view.y - f.y * k));
+    ctx.drawImage(frame.c, 0, 0, r.width, r.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function keepFrame() {
+    if (frame.c.width !== cv.width || frame.c.height !== cv.height) { frame.c.width = cv.width; frame.c.height = cv.height; }
+    const g = frame.c.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(cv, 0, 0);
+    frame.view = lastView; frame.ok = true;
+  }
+  // while dragging a shape: everything else is a frozen picture, only the moving shape is redrawn
+  const still = { c: document.createElement('canvas'), key: null };
+  let dragId = null, dragMode = null;
+  const sprite = { c: document.createElement('canvas'), key: null, ref: null };
   function drawNow() {
+    if (dragId != null && !preview) { drawDragging(); return; }
+    drawScene(null);
+    lastView = Object.assign({}, view);
+  }
+  function drawDragging() {
+    const key = dragId + '|' + view.s + '|' + view.x + '|' + view.y + '|' + cv.width + 'x' + cv.height;
+    if (still.key !== key) {
+      drawScene(dragId, true);
+      if (still.c.width !== cv.width || still.c.height !== cv.height) { still.c.width = cv.width; still.c.height = cv.height; }
+      const g = still.c.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(cv, 0, 0);
+      still.key = key;
+    }
+    const r = cv.getBoundingClientRect();
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(still.c, 0, 0); ctx.setTransform(cv.width / r.width, 0, 0, cv.width / r.width, 0, 0);
+    const o = doc.objects.find(x => x.id === dragId);
+    if (!o) return;
+    if (dragMode === 'moveobj') {
+      // render the moving layer once, then just slide that picture
+      if (sprite.key !== key) {
+        if (sprite.c.width !== cv.width || sprite.c.height !== cv.height) { sprite.c.width = cv.width; sprite.c.height = cv.height; }
+        const keep = ctx; const g = sprite.c.getContext('2d'); g.setTransform(cv.width / r.width, 0, 0, cv.width / r.width, 0, 0); g.clearRect(0, 0, r.width, r.height);
+        ctx = g; try { drawObjects([o]); } finally { ctx = keep; }
+        sprite.key = key; sprite.ref = bbox(o);
+      }
+      const bb = bbox(o), dx = (bb[0] - sprite.ref[0]) * view.s, dy = (bb[1] - sprite.ref[1]) * view.s;
+      ctx.drawImage(sprite.c, dx, dy, r.width, r.height);
+      if (o.id === selId) drawHandles(o);
+      return;
+    }
+    drawObjects([o]); if (o.id === selId) drawHandles(o);
+  }
+  let sceneSkip = null, sceneNoHandles = false;
+  function drawScene(skipId, noHandles) { sceneSkip = skipId; sceneNoHandles = !!noHandles; try { drawSceneInner(); } finally { sceneSkip = null; sceneNoHandles = false; } }
+  function drawSceneInner() {
     const r = cv.getBoundingClientRect();
     ctx.clearRect(0, 0, r.width, r.height);
     const h = hoop();
@@ -195,31 +269,28 @@
     drawDraft();
   }
 
-  function drawDesign() {
+  function drawObjects(list) {
     if (doc.realistic !== false) {
       const layers = [];
-      for (const o of expand(doc.objects)) {
-        const lines = pieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts);
-        if (lines.length) layers.push({ color: o.color, lines });
-      }
+      for (const o of expand(list)) { const lines = pieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts); if (lines.length) layers.push({ color: o.color, lines }); }
       Render.draw(ctx, layers, view, { thread: 0.42 });
-      const o = sel();
-      if (o) drawHandles(o);
-      drawBgSel();
       return;
     }
     const lw = Math.max(0.6, Math.min(1.6, view.s * 0.12));
-    for (const o of expand(doc.objects)) {
-      const P = pieces(o);
-      ctx.strokeStyle = o.color; ctx.lineWidth = lw; ctx.globalAlpha = selId === null || o.id === selId || String(o.id).split(':')[0] === String(selId) ? 1 : 0.55;
-      ctx.beginPath();
-      for (const pc of P) {
-        if (pc.kind === 'underlay') continue;
-        pc.pts.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-      }
+    for (const o of expand(list)) {
+      ctx.strokeStyle = o.color; ctx.lineWidth = lw; ctx.beginPath();
+      for (const pc of pieces(o)) { if (pc.kind === 'underlay') continue; pc.pts.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); }
       ctx.stroke();
-      ctx.globalAlpha = 1;
     }
+  }
+  function drawDesign() {
+    const list = doc.objects.filter(o => o.id !== sceneSkip);
+    if (doc.realistic === false && selId !== null) {
+      // simple view: dim everything except the selected layer
+      ctx.save(); ctx.globalAlpha = 0.55; drawObjects(list.filter(o => o.id !== selId)); ctx.restore();
+      drawObjects(list.filter(o => o.id === selId));
+    } else drawObjects(list);
+    if (sceneNoHandles) return;
     const o = sel();
     if (o) drawHandles(o);
     drawBgSel();
@@ -452,7 +523,7 @@
       const d = Math.hypot(a[0] - b[0], a[1] - b[1]), c = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       const s = Math.max(0.5, Math.min(120, gesture.v.s * d / gesture.d));
       const mm = [(gesture.c[0] - gesture.v.x) / gesture.v.s, (gesture.c[1] - gesture.v.y) / gesture.v.s];
-      view.s = s; view.x = c[0] - mm[0] * s; view.y = c[1] - mm[1] * s; draw(); return;
+      view.s = s; view.x = c[0] - mm[0] * s; view.y = c[1] - mm[1] * s; drawNav(); return;
     }
     if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w; const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; doc.width = nw; gesture.moved = true; draw(); return; }
     if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
@@ -471,6 +542,7 @@
     if (!gesture.moved && Math.hypot(dx, dy) > 6) gesture.moved = true;
     if (!gesture.moved) return;
     const p = toMM(e.offsetX, e.offsetY);
+    if ((gesture.type === 'node' || gesture.type === 'moveobj') && dragId == null) { dragId = selId; dragMode = gesture.type; sprite.key = null; }
     if (gesture.type === 'node') {
       const o = sel();
       if (o.type === 'text') { o.x = p[0]; o.y = p[1]; layoutText(o); }
@@ -484,7 +556,7 @@
     if (gesture.type === 'draftnode') { gesture.list[gesture.k][0] = p[0]; gesture.list[gesture.k][1] = p[1]; draw(); return; }
     // pan
     gesture.type = 'pan';
-    view.x = gesture.v.x + dx; view.y = gesture.v.y + dy; draw();
+    view.x = gesture.v.x + dx; view.y = gesture.v.y + dy; drawNav();
   });
   const endPointer = e => {
     if (!pointers.has(e.pointerId)) return;
@@ -492,6 +564,7 @@
     if (!gesture) return;
     if (gesture.type === 'pinch') { if (pointers.size === 0) gesture = null; return; }
     const g = gesture; gesture = null;
+    if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
@@ -506,7 +579,7 @@
   cv.addEventListener('wheel', e => {
     e.preventDefault();
     const s = Math.max(0.5, Math.min(120, view.s * Math.exp(-e.deltaY * 0.0015)));
-    const mm = toMM(e.offsetX, e.offsetY); view.s = s; view.x = e.offsetX - mm[0] * s; view.y = e.offsetY - mm[1] * s; draw();
+    const mm = toMM(e.offsetX, e.offsetY); view.s = s; view.x = e.offsetX - mm[0] * s; view.y = e.offsetY - mm[1] * s; drawNav();
   }, { passive: false });
 
   function translate(o, dx, dy) {
@@ -1430,6 +1503,8 @@
   $('#sMin').addEventListener('click', () => setSheetSize(sheetSize === 'max' ? 'normal' : 'min'));
   $('#sMax').addEventListener('click', () => setSheetSize(sheetSize === 'min' ? 'normal' : 'max'));
   $('#sheetTitle').addEventListener('click', () => setSheetSize(sheetSize === 'min' ? 'normal' : 'min'));
+  window.addEventListener('pagehide', () => autosaveNow());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) autosaveNow(); });
   window.addEventListener('resize', resize);
   if (window.ResizeObserver) new ResizeObserver(() => resize()).observe($('#stage'));
 
