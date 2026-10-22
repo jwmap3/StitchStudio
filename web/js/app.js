@@ -46,6 +46,7 @@
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
   const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null };   // Pick tool
   let imgMove = false;           // drag the picture instead of the view
+  let bgSel = false;             // picture selected in Select
   const IN = 25.4;
   const inch = mm => (mm / IN).toFixed(2);
   const cache = new Map();       // id -> {key, pieces}
@@ -128,8 +129,18 @@
     cache.set(o.id, { key, pieces: p });
     return p;
   }
+  // an imported design is one layer, but sews as one block per thread colour
+  function expand(list) {
+    const out = [];
+    for (const o of list) {
+      if (o.hidden) continue;
+      if (o.type === 'import') (o.blocks || []).forEach((bl, i) => out.push({ id: o.id + ':' + i, type: 'stitches', lines: bl.lines, color: bl.color, name: o.name }));
+      else out.push(o);
+    }
+    return out;
+  }
   function design() {
-    const objs = doc.objects.filter(o => !o.hidden);
+    const objs = expand(doc.objects);
     // build with the cached pieces
     const fake = objs.map(o => Object.assign({}, o, { __p: pieces(o) }));
     const orig = S.objectPieces;
@@ -174,7 +185,7 @@
     ctx.strokeStyle = '#5b6372'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
     ctx.strokeRect(hx, hy, h.w * view.s, h.h * view.s); ctx.setLineDash([]);
     // background image
-    if (bgImg && doc.bg && !preview) {
+    if (bgImg && doc.bg && !preview && !doc.bgHidden) {
       ctx.globalAlpha = doc.bgOpacity;
       const b = doc.bg, [x, y] = toPX([b.x, b.y]);
       ctx.drawImage(bgImg, x, y, b.w * view.s, b.h * view.s);
@@ -187,21 +198,20 @@
   function drawDesign() {
     if (doc.realistic !== false) {
       const layers = [];
-      for (const o of doc.objects) {
-        if (o.hidden) continue;
+      for (const o of expand(doc.objects)) {
         const lines = pieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts);
         if (lines.length) layers.push({ color: o.color, lines });
       }
       Render.draw(ctx, layers, view, { thread: 0.42 });
       const o = sel();
       if (o) drawHandles(o);
+      drawBgSel();
       return;
     }
     const lw = Math.max(0.6, Math.min(1.6, view.s * 0.12));
-    for (const o of doc.objects) {
-      if (o.hidden) continue;
+    for (const o of expand(doc.objects)) {
       const P = pieces(o);
-      ctx.strokeStyle = o.color; ctx.lineWidth = lw; ctx.globalAlpha = o.id === selId || selId === null ? 1 : 0.55;
+      ctx.strokeStyle = o.color; ctx.lineWidth = lw; ctx.globalAlpha = selId === null || o.id === selId || String(o.id).split(':')[0] === String(selId) ? 1 : 0.55;
       ctx.beginPath();
       for (const pc of P) {
         if (pc.kind === 'underlay') continue;
@@ -212,14 +222,21 @@
     }
     const o = sel();
     if (o) drawHandles(o);
+    drawBgSel();
   }
 
   function shapeNodes(o) {
     if (o.type === 'fill') return o.paths.flatMap((l, li) => l.map((p, pi) => ({ p, li, pi })));
     if (o.type === 'satin' || o.type === 'run') return o.points.map((p, pi) => ({ p, li: 0, pi }));
     if (o.type === 'text') return [{ p: [o.x, o.y], li: 0, pi: 0 }];
-    if (o.type === 'stitches') return [];
+    if (o.type === 'stitches' || o.type === 'import') return [];
     return [];
+  }
+  function drawBgSel() {
+    if (!bgSel || !doc.bg || tool !== 'select') return;
+    const b = doc.bg, [x, y] = toPX([b.x, b.y]), [x2, y2] = toPX([b.x + b.w, b.y + b.h]);
+    ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.setLineDash([]);
+    ctx.fillStyle = '#4cc2ff'; ctx.beginPath(); ctx.arc(x2, y2, 9, 0, 7); ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.stroke(); ctx.restore();
   }
   function drawHandles(o) {
     ctx.save();
@@ -243,7 +260,7 @@
         o.points.forEach(p => { const [x, y] = toPX(p); ctx.beginPath(); ctx.arc(x, y, (p[2] || o.width || 3) / 2 * view.s, 0, Math.PI * 2); ctx.stroke(); });
       }
     }
-    if (o.type === 'text' || o.type === 'stitches') {
+    if (o.type === 'text' || o.type === 'stitches' || o.type === 'import') {
       const bb = bbox(o); if (bb) { const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]); ctx.strokeRect(a - 4, b - 4, c - a + 8, d - b + 8); }
     }
     ctx.setLineDash([]);
@@ -359,6 +376,7 @@
     if (o.type === 'fill') pts = o.paths.flat();
     else if (o.type === 'text') pts = (o.glyphs || []).flatMap(g => g.paths.flat());
     else if (o.type === 'stitches') pts = o.lines.flat();
+    else if (o.type === 'import') pts = o.blocks.flatMap(bl => bl.lines.flat());
     else pts = o.points;
     if (!pts.length) return null;
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
@@ -370,7 +388,7 @@
     for (let i = doc.objects.length - 1; i >= 0; i--) {
       const o = doc.objects[i]; if (o.hidden) continue;
       if (o.type === 'fill' && pointInLoops(p, o.paths)) return o;
-      if (o.type === 'text' || o.type === 'stitches') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
+      if (o.type === 'text' || o.type === 'stitches' || o.type === 'import') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
       if (o.type === 'satin' && distToPolyline(p, o.points) < Math.max(tol, (o.points[0] && o.points[0][2] || 3) / 2)) return o;
       if (o.type === 'run' && distToPolyline(p, o.points) < tol) return o;
     }
@@ -399,11 +417,16 @@
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
       const so = sel();
-      if (so && so.type !== 'text') { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
+      if (so && ['fill', 'satin', 'run'].includes(so.type)) { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
     }
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
     if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
+    if (tool === 'select' && !preview && bgSel && doc.bg) {
+      const b = doc.bg, [cx2, cy2] = toPX([b.x + b.w, b.y + b.h]);
+      if (Math.hypot(e.offsetX - cx2, e.offsetY - cy2) < 22) { gesture.type = 'resizeimg'; return; }
+      if (p[0] >= b.x && p[0] <= b.x + b.w && p[1] >= b.y && p[1] <= b.y + b.h && !hitObject(p)) { gesture.type = 'moveimg'; gesture.last = p; return; }
+    }
     if (tool === 'select' && !preview) {
       const o = sel();
       if (o) {
@@ -431,6 +454,7 @@
       const mm = [(gesture.c[0] - gesture.v.x) / gesture.v.s, (gesture.c[1] - gesture.v.y) / gesture.v.s];
       view.s = s; view.x = c[0] - mm[0] * s; view.y = c[1] - mm[1] * s; draw(); return;
     }
+    if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w; const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; doc.width = nw; gesture.moved = true; draw(); return; }
     if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
     if (gesture.type === 'pickstroke' && stroke) {
       if (!gesture.moved && Math.hypot(e.offsetX - gesture.start[0], e.offsetY - gesture.start[1]) > 8) gesture.moved = true;
@@ -470,6 +494,7 @@
     const g = gesture; gesture = null;
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
+    if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
     if (g.type === 'moveimg') { autosave(); if (window.__imgSheet) renderImageSheet(); return; }
     if (g.type === 'lasso') { const st = stroke; stroke = null; finishLasso(st); return; }
     if (g.type === 'pickstroke') { const st = stroke; stroke = null; if (!g.moved) pickTap(g.p); else pickDirection(st); return; }
@@ -487,15 +512,18 @@
   function translate(o, dx, dy) {
     if (o.type === 'fill') { o.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); (o.flow || []).forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })); }
     else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }));
+    else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })));
     else if (o.type === 'text') { o.x += dx; o.y += dy; o.glyphs.forEach(g => g.paths.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }))); }
     else o.points.forEach(q => { q[0] += dx; q[1] += dy; });
   }
 
   function onTap(p) {
     if (preview) return;
-    if (tool === 'select' && sel() && sel().type !== 'text' && insertPoint(sel(), p)) return;
+    if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
     if (tool === 'select' || tool === 'layers' || tool === 'auto') {
       const o = hitObject(p);
+      if (!o && tool === 'select' && doc.bg && !doc.bgHidden && p[0] >= doc.bg.x && p[0] <= doc.bg.x + doc.bg.w && p[1] >= doc.bg.y && p[1] <= doc.bg.y + doc.bg.h) { selId = null; bgSel = true; renderSheet(); draw(); return; }
+      bgSel = false;
       selId = o ? o.id : null; selNode = -1;
       if (o && tool !== 'select') setTool('select', true);
       renderSheet(); draw(); return;
@@ -920,6 +948,7 @@
   function setTool(t, keepSel) {
     if (draft && t !== tool) draft = null;
     if (t === 'fill' || t === 'satin' || t === 'run') drawKind = t;
+    if (t !== 'select' && t !== 'layers') bgSel = false;
     tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush' && t !== 'pick') selId = null;
     document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t || (b.dataset.tool === 'draw' && t === drawKind)));
     renderSheet(); draw();
@@ -936,6 +965,7 @@
     if (tool === 'auto') return renderAutoSheet();
     if (tool === 'layers') return renderLayers();
     const o = sel();
+    if (!o && bgSel && doc.bg) { hint('Drag the picture to move it · drag the blue corner to resize'); return renderImageSheet(); }
     if (!o) { sheet.innerHTML = ''; syncSheetBar(); hint(doc.objects.length ? 'Tap a shape to edit it' : 'Open an image from the menu, then trace it or tap Auto'); return; }
     renderProps(o);
   }
@@ -1055,8 +1085,22 @@
 
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
-    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches' }[o.type]}</h3>`];
+    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]}</h3>`];
     parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
+    if (o.type === 'import') {
+      const k = Math.min(o.blocks.length - 1, renderProps.blk || 0);
+      parts.length = 1;
+      parts[0] = `<div class="sec"><h3>${esc(o.name)} · Imported design</h3><p class="small" style="margin:0 0 6px">${o.blocks.length} threads, kept stitch for stitch. Drag inside the box to move it. Use Sew earlier / later (or Layers) to put it over or under other layers.</p>`;
+      parts.push(`<div class="swatches" id="impBlk">${o.blocks.map((bl, i) => `<button class="sw ${i === k ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name)}"></button>`).join('')}</div><p class="small" style="margin:6px 0">Thread ${k + 1}: ${esc(o.blocks[k].name)} — pick a new colour:</p>`);
+      parts.push(colorPicker(o.blocks[k].color, c => { o.blocks[k].color = c; if (k === 0) o.color = c; commit(); renderSheet(); draw(); }));
+      parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
+      mount(parts);
+      $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { renderProps.blk = +b2.dataset.i; renderSheet(); }));
+      on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
+      on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
+      on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
+      return;
+    }
     if (o.type === 'stitches') parts.push('<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p>');
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
@@ -1188,22 +1232,26 @@
 
 
   function renderLayers() {
-    if (!doc.objects.length) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
+    if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
     const parts = ['<div class="sec"><h3>Sew order (top sews first)</h3>'];
     doc.objects.forEach((o, i) => {
       const P = pieces(o); let n = 0; P.forEach(p => n += p.pts.length);
-      parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${o.color}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches' }[o.type]} · ${n.toLocaleString()} st</span></span>
+      const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
+      parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${dotBg}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]} · ${n.toLocaleString()} st</span></span>
         <button class="ib" data-a="up" aria-label="Sew earlier"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
         <button class="ib" data-a="down" aria-label="Sew later"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <button class="ib" data-a="eye" aria-label="Show or hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.5-1"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     });
+    if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · always underneath</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     parts.push('</div>');
     mount(parts);
-    sheet.querySelectorAll('.layer').forEach(el => {
+    const bgRow = sheet.querySelector('[data-bg]');
+    if (bgRow) bgRow.addEventListener('click', e => { if (e.target.closest('button')) { doc.bgHidden = !doc.bgHidden; autosave(); renderSheet(); draw(); return; } selId = null; bgSel = true; setTool('select', true); });
+    sheet.querySelectorAll('.layer[data-id]').forEach(el => {
       const o = doc.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => {
         const a = e.target.closest('button'); if (a) { e.stopPropagation(); if (a.dataset.a === 'up') move(o, -1); else if (a.dataset.a === 'down') move(o, 1); else { o.hidden = !o.hidden; commit(); renderSheet(); draw(); } return; }
-        selId = o.id; selNode = -1; renderSheet(); draw();
+        selId = o.id; bgSel = false; selNode = -1; renderSheet(); draw();
       });
     });
   }
@@ -1268,6 +1316,7 @@
       doc.objects.forEach(o => {
         if (o.type === 'fill') { o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f)); }
         else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
+        else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f)));
         else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; o.size *= k; if (o.bend) o.bend /= k; layoutText(o); }
         else o.points.forEach(q => { f(q); if (o.type === 'satin') q[2] *= k; });
       });
@@ -1351,14 +1400,12 @@
         const h = hoop(), dx = h.w / 2 - (a + c) / 2, dy = h.h / 2 - (b + d) / 2;
         const base = f.name.replace(/\.[^.]+$/, '');
         let added = 0;
-        res.blocks.forEach((bl, i) => {
-          bl.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; }));
-          const o = { type: 'stitches', name: base + ' · ' + (bl.name && !bl.name.startsWith('#') ? bl.name : 'colour ' + (i + 1)), lines: bl.lines, color: bl.color, id: doc.nextId++ };
-          doc.objects.push(o); added++;
-        });
-        selId = null; commit(); renderSheet(); draw();
+        res.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(q => { q[0] += dx; q[1] += dy; })));
+        const imp = { type: 'import', name: base, blocks: res.blocks.map((bl, i) => ({ color: bl.color, name: bl.name && !bl.name.startsWith('#') ? bl.name : 'Thread ' + (i + 1), lines: bl.lines })), color: res.blocks[0].color, id: doc.nextId++ };
+        doc.objects.push(imp); added = imp.blocks.length;
+        selId = imp.id; if (tool !== 'select') setTool('select', true); commit(); renderSheet(); draw();
         const wIn = (c - a) / IN, hIn = (d - b) / IN;
-        toast(`Added ${added} layer${added > 1 ? 's' : ''} from ${f.name} (${wIn.toFixed(2)} × ${hIn.toFixed(2)} in)`);
+        toast(`Added ${f.name} as one layer (${added} thread${added > 1 ? 's' : ''}, ${wIn.toFixed(2)} × ${hIn.toFixed(2)} in) — drag to place it`);
         if (c - a > h.w || d - b > h.h) setTimeout(() => toast('Heads up: it is bigger than the current hoop'), 2800);
       } catch (err) { console.error(err); toast('Could not read that file: ' + err.message); }
     };

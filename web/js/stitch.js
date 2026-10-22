@@ -375,6 +375,7 @@
     if (o.type === 'fill') return fillObject(o);
     if (o.type === 'satin') return satinObject(o);
     if (o.type === 'run') return runObject(o);
+    if (o.type === 'import') return (o.blocks || []).flatMap(bl => bl.lines.filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' })));
     if (o.type === 'stitches') return (o.lines || []).filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' }));
     if (o.type === 'text' && o.glyphs) {
       // glyphs are pre-traced fill shapes (see app text tool); each sewn as satin-look fill
@@ -643,15 +644,16 @@
       const nc = u8(); u8(); let color = 0; for (let m = 0; m < nc; m++) { color = u24(); u8(); u16(); }
       u8(); u8(); str8(); const desc = str8(); str8();
       p += 15; p += 3;
-      const lines = []; let line = [[x, y]];
+      const lines = []; let line = [[x, y]], jump = false;
+      const newAt = () => { if (line.length > 1) lines.push(line); line = [[x, y]]; };
       const sb = new Int8Array(d.buffer, d.byteOffset + p, Math.max(0, end - p));
       let i = 0;
       const s16 = (a2, b2) => { const v = ((a2 & 255) << 8) | (b2 & 255); return v > 0x7fff ? v - 0x10000 : v; };
       while (i < sb.length - 1) {
         let dx = sb[i], dy = sb[i + 1]; i += 2;
-        if ((dx & 255) !== 0x80) { x += dx; y += dy; line.push([x, y]); continue; }
-        if (dy === 1) { dx = s16(sb[i], sb[i + 1]); i += 2; dy = s16(sb[i], sb[i + 1]); i += 2; i += 2; x += dx; y += dy; line.push([x, y]); }
-        else if (dy === 3) { if (line.length > 1) lines.push(line); line = [[x, y]]; }
+        if ((dx & 255) !== 0x80) { x += dx; y += dy; if (jump) { newAt(); jump = false; } else line.push([x, y]); continue; }
+        if (dy === 1) { dx = s16(sb[i], sb[i + 1]); i += 2; dy = s16(sb[i], sb[i + 1]); i += 2; i += 2; x += dx; y += dy; newAt(); jump = false; }   // long move = jump (machine moves without sewing)
+        else if (dy === 3) { newAt(); jump = true; }                                       // trim: next move is a jump
       }
       if (line.length > 1) lines.push(line);
       p = end;
