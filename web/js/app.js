@@ -231,7 +231,7 @@
       }
       const bb = bbox(o), dx = (bb[0] - sprite.ref[0]) * view.s, dy = (bb[1] - sprite.ref[1]) * view.s;
       ctx.drawImage(sprite.c, dx, dy, r.width, r.height);
-      if (o.id === selId) drawHandles(o);
+      if (o.id === selId) { drawHandles(o); drawXformHandle(o); }
       return;
     }
     drawObjects([o]); if (o.id === selId) { drawHandles(o); drawXformHandle(o); }
@@ -309,14 +309,19 @@
     if (o.type === 'stitches' || o.type === 'import') return [];
     return [];
   }
+  const HANDLES = [['nw', 0, 0], ['n', .5, 0], ['ne', 1, 0], ['e', 1, .5], ['se', 1, 1], ['s', .5, 1], ['sw', 0, 1], ['w', 0, .5]];
+  function handlePts(bb) {
+    const [x, y] = toPX([bb[0], bb[1]]), [x2, y2] = toPX([bb[2], bb[3]]), P = 7;
+    return HANDLES.map(([id, u, v]) => [id, x - P + (x2 - x + 2 * P) * u, y - P + (y2 - y + 2 * P) * v]);
+  }
   function drawXformHandle(o) {
     if (tool !== 'select' || !o) return;
     const bb = bbox(o); if (!bb) return;
-    const [x, y] = toPX([bb[0], bb[1]]), [x2, y2] = toPX([bb[2], bb[3]]);
-    ctx.save(); ctx.strokeStyle = 'rgba(76,194,255,.8)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); ctx.strokeRect(x - 6, y - 6, x2 - x + 12, y2 - y + 12); ctx.setLineDash([]);
-    ctx.fillStyle = '#4cc2ff'; ctx.strokeStyle = '#16181d'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.rect(x2 + 6 - 9, y2 + 6 - 9, 18, 18); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x2 - 1, y2 + 9); ctx.lineTo(x2 + 9, y2 + 9); ctx.lineTo(x2 + 9, y2 - 1); ctx.stroke();
+    const [x, y] = toPX([bb[0], bb[1]]), [x2, y2] = toPX([bb[2], bb[3]]), P = 7;
+    ctx.save();
+    ctx.fillStyle = 'rgba(76,194,255,.07)'; ctx.fillRect(x - P, y - P, x2 - x + 2 * P, y2 - y + 2 * P);
+    ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]); ctx.strokeRect(x - P, y - P, x2 - x + 2 * P, y2 - y + 2 * P); ctx.setLineDash([]);
+    handlePts(bb).forEach(([id, hx, hy]) => { ctx.beginPath(); ctx.rect(hx - 6, hy - 6, 12, 12); ctx.fillStyle = id.length === 2 ? '#4cc2ff' : '#ffffff'; ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.lineWidth = 1.5; ctx.stroke(); });
     ctx.restore();
   }
   function drawBgSel() {
@@ -544,11 +549,14 @@
     if (tool === 'select' && !preview && sel()) {
       const o = sel(), bb = bbox(o);
       if (bb) {
-        const [hx2, hy2] = toPX([bb[2], bb[3]]);
-        if (Math.hypot(e.offsetX - (hx2 + 6), e.offsetY - (hy2 + 6)) < 24) {
-          const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
-          gesture.type = 'scaleobj'; gesture.orig = JSON.stringify(o); gesture.c = [cx, cy]; gesture.d0 = Math.max(0.5, Math.hypot(p[0] - cx, p[1] - cy)); return;
+        const hit = handlePts(bb).find(([id, hx, hy]) => Math.abs(e.offsetX - hx) < 13 && Math.abs(e.offsetY - hy) < 13);
+        if (hit) {
+          const id = hit[0], ax = id.includes('w') ? bb[2] : id.includes('e') ? bb[0] : (bb[0] + bb[2]) / 2, ay = id.includes('n') ? bb[3] : id.includes('s') ? bb[1] : (bb[1] + bb[3]) / 2;
+          gesture.type = 'scaleobj'; gesture.orig = JSON.stringify(o); gesture.h = id; gesture.c = [ax, ay]; gesture.w0 = Math.max(0.3, bb[2] - bb[0]); gesture.h0 = Math.max(0.3, bb[3] - bb[1]); gesture.bb = bb; return;
         }
+        // drag anywhere inside the selected layer's box to move the whole thing
+        const P = 7 / view.s;
+        if (p[0] >= bb[0] - P && p[0] <= bb[2] + P && p[1] >= bb[1] - P && p[1] <= bb[3] + P && hitNode(o, p) < 0) { gesture.type = 'moveobj'; gesture.last = p; return; }
       }
     }
     if (tool === 'select' && !preview && bgSel && doc.bg) {
@@ -585,11 +593,17 @@
     }
     if (gesture.type === 'scaleobj') {
       const p = toMM(e.offsetX, e.offsetY), o = sel(); if (!o) return;
-      const k = Math.max(0.05, Math.hypot(p[0] - gesture.c[0], p[1] - gesture.c[1]) / gesture.d0);
+      const id = gesture.h, linked = doc.linkWH !== false && !e.shiftKey && o.type !== 'text' ? true : (o.type === 'text');
+      let kx = id.includes('w') || id.includes('e') ? Math.abs(p[0] - gesture.c[0]) / gesture.w0 : 1;
+      let ky = id.includes('n') || id.includes('s') ? Math.abs(p[1] - gesture.c[1]) / gesture.h0 : 1;
+      if (id.length === 1 && linked) { const k1 = id === 'n' || id === 's' ? ky : kx; kx = ky = k1; }
+      else if (id.length === 2 && linked) { const k1 = Math.hypot(p[0] - gesture.c[0], p[1] - gesture.c[1]) / Math.hypot(gesture.w0, gesture.h0); kx = ky = k1; }
+      kx = Math.max(0.05, kx); ky = Math.max(0.05, ky);
       const fresh = JSON.parse(gesture.orig); for (const key in fresh) o[key] = fresh[key];
-      xform(o, k, 0, false, false, gesture.c);
-      gesture.moved = true; gesture.k = k; dragId = o.id; dragMode = 'scale';
-      hint(`${Math.round(k * 100)}%`); draw(); return;
+      // edge handles with link on scale about the middle of the opposite edge
+      xform(o, [kx, ky], 0, false, false, gesture.c);
+      gesture.moved = true; dragId = o.id; dragMode = 'scale';
+      hint(kx === ky ? `${Math.round(kx * 100)}%` : `W ${Math.round(kx * 100)}% · H ${Math.round(ky * 100)}%`); draw(); return;
     }
     if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w; const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; doc.width = nw; gesture.moved = true; draw(); return; }
     if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
@@ -631,7 +645,7 @@
     if (gesture.type === 'pinch') { if (pointers.size === 0) gesture = null; return; }
     const g = gesture; gesture = null;
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
-    if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); return; }
+    if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && hit.id !== selId) { selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); } return; }
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
@@ -1273,7 +1287,9 @@
     const bb = bbox(o); if (!bb) return;
     const cx = center ? center[0] : (bb[0] + bb[2]) / 2, cy = center ? center[1] : (bb[1] + bb[3]) / 2;
     const a = (rotDeg || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), sx = fx ? -1 : 1, sy = fy ? -1 : 1;
-    const f = q => { const x = (q[0] - cx) * k * sx, y = (q[1] - cy) * k * sy; q[0] = cx + x * c - y * sn; q[1] = cy + x * sn + y * c; };
+    const kx = Array.isArray(k) ? k[0] : k, ky = Array.isArray(k) ? k[1] : k;
+    k = Math.sqrt(Math.abs(kx * ky));       // for widths / text size
+    const f = q => { const x = (q[0] - cx) * kx * sx, y = (q[1] - cy) * ky * sy; q[0] = cx + x * c - y * sn; q[1] = cy + x * sn + y * c; };
     if (o.type === 'fill') {
       o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f));
       if (fx !== fy) o.angle = -(o.angle || 0);
@@ -1283,7 +1299,7 @@
     else if (o.type === 'run') o.points.forEach(f);
     else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
     else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f)));
-    else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; o.size *= k; if (o.bend) o.bend /= k; layoutText(o); }
+    else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; const kt = Math.abs(kx - 1) > Math.abs(ky - 1) ? kx : ky; o.size *= kt; if (o.bend) o.bend /= kt; if (kx !== ky) o.spacingLetters = (o.spacingLetters || 0) + 0; layoutText(o); }
   }
   function transformPanel(o) {
     const bb = bbox(o); if (!bb) return '';
@@ -1291,14 +1307,17 @@
     return `</div><div class="sec"><h3>Transform</h3>
       <div class="row"><label>Width</label><input type="number" id="xW" step="0.05" min="0.1" value="${inch(bb[2] - bb[0])}"><span class="val">in</span></div>
       <div class="row"><label>Height</label><input type="number" id="xH" step="0.05" min="0.1" value="${inch(bb[3] - bb[1])}"><span class="val">in</span></div>
+      ${o.type === 'text' ? '' : `<div class="row"><label>Proportions</label><div class="toggle" id="xLink"><button data-v="1" class="${doc.linkWH !== false ? 'on' : ''}">🔗 Linked</button><button data-v="0" class="${doc.linkWH === false ? 'on' : ''}">Unlinked</button></div></div>`}
       <div class="btns" style="margin:4px 0 8px">${btn('xC', '⊕ Center in hoop', 'sm')}${btn('xCh', '↔ Center', 'sm')}${btn('xCv', '↕ Center', 'sm')}</div>
       <div class="btns" style="margin:4px 0 8px">${btn('xS9', '− 10%', 'sm')}${btn('xS11', '+ 10%', 'sm')}${btn('xS50', '½ size', 'sm')}${btn('xS200', '2×', 'sm')}</div>
       ${canTurn ? `<div class="btns" style="margin:0 0 8px">${btn('xRl', '⟲ 15°', 'sm')}${btn('xRr', '⟳ 15°', 'sm')}${btn('xR90', '⟳ 90°', 'sm')}${btn('xFh', '⇋ Flip', 'sm')}${btn('xFv', '⇵ Flip', 'sm')}</div>` : '<p class="small" style="margin:0 0 6px">Text resizes here; use Arch and Spacing to shape it.</p>'}
-      <p class="small" style="margin:0">Or drag the blue corner on the canvas to resize.${isStitch ? ' Imported stitches keep their stitch count, so resizing more than about 20% makes them denser or looser — re-digitize for big size changes.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
+      <p class="small" style="margin:0">Or drag the handles on the canvas: corners resize, sides stretch (hold Shift to free the proportions). Drag inside the box to move.${isStitch ? ' Imported stitches keep their stitch count, so resizing more than about 20% makes them denser or looser — re-digitize for big size changes.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
   }
   function bindTransform(o) {
     const apply = (k, r, fx, fy) => { xform(o, k, r, fx, fy); commit(); renderSheet(); draw(); };
-    const setSize = (axis, inches) => { const bb = bbox(o); if (!bb || !(inches > 0)) return; const cur = axis ? bb[3] - bb[1] : bb[2] - bb[0]; if (cur > 0) apply(inches * IN / cur, 0, false, false); };
+    const setSize = (axis, inches) => { const bb = bbox(o); if (!bb || !(inches > 0)) return; const cur = axis ? bb[3] - bb[1] : bb[2] - bb[0]; if (!(cur > 0)) return; const k = inches * IN / cur;
+      apply(doc.linkWH === false && o.type !== 'text' ? (axis ? [1, k] : [k, 1]) : k, 0, false, false); };
+    const lk = $('#xLink'); if (lk) lk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.linkWH = b2.dataset.v === '1'; autosave(); renderSheet(); }));
     const w = $('#xW'), h = $('#xH');
     if (w) { w.addEventListener('change', () => setSize(0, parseFloat(w.value))); h.addEventListener('change', () => setSize(1, parseFloat(h.value))); }
     const ctr = ax => { const bb = bbox(o), h = hoop(); translate(o, ax === 'v' ? 0 : h.w / 2 - (bb[0] + bb[2]) / 2, ax === 'h' ? 0 : h.h / 2 - (bb[1] + bb[3]) / 2); commit(); renderSheet(); draw(); toast('Centered'); };
@@ -1514,7 +1533,7 @@
       const o = doc.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => {
         const a = e.target.closest('button'); if (a) { e.stopPropagation(); if (a.dataset.a === 'up') move(o, -1); else if (a.dataset.a === 'down') move(o, 1); else { o.hidden = !o.hidden; commit(); renderSheet(); draw(); } return; }
-        selId = o.id; bgSel = false; selNode = -1; renderSheet(); draw();
+        selId = o.id; bgSel = false; selNode = -1; setTool('select', true);
       });
     });
   }

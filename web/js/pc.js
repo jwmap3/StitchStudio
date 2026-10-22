@@ -232,7 +232,7 @@
     }).join('');
     box.querySelectorAll('.lr').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
-      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } SS.select(o.id); });
+      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.select(o.id); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });
       el.addEventListener('dragstart', e => { dragFrom = o; e.dataTransfer.effectAllowed = 'move'; });
       el.addEventListener('dragover', e => { if (dragFrom) { e.preventDefault(); el.classList.add('dragover'); } });
