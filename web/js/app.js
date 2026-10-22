@@ -278,7 +278,7 @@
     if (doc.realistic !== false) {
       const layers = [];
       for (const o of expand(list)) { const lines = pieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts); if (lines.length) layers.push({ color: o.color, lines }); }
-      Render.draw(ctx, layers, view, { thread: 0.42 });
+      Render.draw(ctx, layers, view, { thread: 0.46 });
       return;
     }
     const lw = Math.max(0.6, Math.min(1.6, view.s * 0.12));
@@ -435,7 +435,7 @@
       if (s2.c === 0) { if (!line) { line = []; cur.lines.push(line); } line.push([s2.x, s2.y]); }
       else { line = [[s2.x, s2.y]]; cur.lines.push(line); }
     }
-    Render.draw(ctx, layers, view, { thread: 0.42, limit: Math.round(d.count * progress) });
+    Render.draw(ctx, layers, view, { thread: 0.46, limit: Math.round(d.count * progress) });
   }
 
 
@@ -865,7 +865,7 @@
       const M = new Uint8Array(w * h);
       for (let k = 0; k < w * h; k++) M[k] = data[k * 4 + 3] > 110 ? 1 : 0;
       const cw = mc.measureText(ch).width;
-      let loops = T.contours(M, w, h).map(l => T.simplify(l, 0.6)).filter(l => Math.abs(T.area(l)) > 6);
+      let loops = T.contours(M, w, h).filter(l => Math.abs(T.area(l)) > 6).map(l => T.smoothLoop(l, 1.1, 45));
       // borders: centre line of each satin border = letter edge pushed out by (inner borders + half this border)
       const bl = borders.map((b, bi) => {
         const off = borders.slice(0, bi).reduce((t, x) => t + x.w, 0) + b.w / 2;
@@ -877,8 +877,17 @@
         const grown = T.contours(grab(), w, h);
         g.globalCompositeOperation = 'destination-out'; g.lineWidth = r * 2;
         grown.forEach(l => { g.beginPath(); l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.stroke(); });
+        // then shrink by r2 and grow back by r2: outside corners get a radius r2 (≥ half the border width)
+        const r2 = (b.w * 0.6 + 0.1) * PXMM;
+        const closed = T.contours(grab(), w, h);
+        g.lineWidth = r2 * 2;
+        closed.forEach(l => { g.beginPath(); l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.stroke(); });
         g.globalCompositeOperation = 'source-over';
-        return T.contours(grab(), w, h).map(l => T.simplify(l, 0.8)).filter(l => Math.abs(T.area(l)) > 20);
+        const opened = T.contours(grab(), w, h);
+        g.clearRect(0, 0, w, h); g.beginPath();
+        opened.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); });
+        g.fill('evenodd'); g.stroke();
+        return T.contours(grab(), w, h).filter(l => Math.abs(T.area(l)) > 20).map(l => T.smoothLoop(l, 1.4, 70));
       });
       // glyph-local mm: origin at glyph's horizontal centre on the baseline
       const R = Math.abs(o.bend || 0) < 2 ? 0 : 2000 / o.bend;   // bend > 0 arches up, < 0 smiles down

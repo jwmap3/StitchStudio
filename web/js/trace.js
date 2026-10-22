@@ -178,6 +178,33 @@
     return A.slice(0, -1).concat(B.slice(0, -1));
   };
 
+  // clean outline: remove pixel stair-steps, keep real corners sharp, make curves smooth
+  T.smoothLoop = function (loop, eps, cornerDeg) {
+    let P = T.simplify(loop, eps || 1.0);
+    const n = P.length; if (n < 4) return P;
+    const lim = Math.cos((cornerDeg || 50) * Math.PI / 180);
+    const corner = P.map((p, i) => {
+      const a = P[(i - 1 + n) % n], b = P[(i + 1) % n];
+      const ux = p[0] - a[0], uy = p[1] - a[1], vx = b[0] - p[0], vy = b[1] - p[1];
+      const d = Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1;
+      return (ux * vx + uy * vy) / d < lim;
+    });
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const p1 = P[i], p2 = P[(i + 1) % n];
+      // tangent handles: a corner end uses the straight segment, otherwise Catmull-Rom neighbours
+      const p0 = corner[i] ? [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]] : P[(i - 1 + n) % n];
+      const p3 = corner[(i + 1) % n] ? [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]] : P[(i + 2) % n];
+      const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]), k = Math.max(1, Math.round(L / 2));
+      for (let s = 0; s < k; s++) {
+        const u = s / k, u2 = u * u, u3 = u2 * u;
+        const f = j => 0.5 * ((2 * p1[j]) + (-p0[j] + p2[j]) * u + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * u2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * u3);
+        out.push(s === 0 ? [p1[0], p1[1]] : [f(0), f(1)]);
+      }
+    }
+    return out;
+  };
+
   T.area = function (loop) { let a = 0; for (let i = 0; i < loop.length; i++) { const p = loop[i], q = loop[(i + 1) % loop.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
 
   // dilate a binary mask by r pixels (square)

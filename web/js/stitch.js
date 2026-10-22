@@ -343,7 +343,7 @@
         let len = hw;
         const e = Math.max(0.5, hw * 1.2), a0 = nrm(Math.max(0, t - e)), a1 = nrm(Math.min(total, t + e));
         const turn = a0[0] * a1[1] - a0[1] * a1[0];          // signed sine of the turn
-        if (Math.abs(turn) > 0.25 && Math.sign(turn) === -side && (i >> 1) % 2 === 1) len = hw * Math.max(0.35, 1 - Math.abs(turn) * 0.9);
+        if (Math.abs(turn) > 0.25 && Math.sign(turn) === side && (i >> 1) % 2 === 1) len = hw * Math.max(0.35, 1 - Math.abs(turn) * 0.9);
         pts.push([p[0] + N[0] * len * side, p[1] + N[1] * len * side]);
       }
       return pts;

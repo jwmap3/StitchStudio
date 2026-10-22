@@ -5,7 +5,7 @@
 (function (root) {
   'use strict';
   const R = {};
-  const BUCKETS = 18, VAR = [0.9, 1.0, 1.09];   // 3 brightness variants per direction                       // angle buckets over 180°
+  const BUCKETS = 18, VAR = [0.965, 1.0, 1.035];   // 3 brightness variants per direction                       // angle buckets over 180°
   const LIGHT = -0.95;                      // light from upper-left (radians)
 
   function rgb(hex) { const n = parseInt(String(hex).replace('#', ''), 16) || 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
