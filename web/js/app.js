@@ -228,7 +228,7 @@
       if (o.id === selId) drawHandles(o);
       return;
     }
-    drawObjects([o]); if (o.id === selId) drawHandles(o);
+    drawObjects([o]); if (o.id === selId) { drawHandles(o); drawXformHandle(o); }
   }
   let sceneSkip = null, sceneNoHandles = false;
   function drawScene(skipId, noHandles) { sceneSkip = skipId; sceneNoHandles = !!noHandles; try { drawSceneInner(); } finally { sceneSkip = null; sceneNoHandles = false; } }
@@ -292,7 +292,7 @@
     } else drawObjects(list);
     if (sceneNoHandles) return;
     const o = sel();
-    if (o) drawHandles(o);
+    if (o) { drawHandles(o); drawXformHandle(o); }
     drawBgSel();
   }
 
@@ -302,6 +302,16 @@
     if (o.type === 'text') return [{ p: [o.x, o.y], li: 0, pi: 0 }];
     if (o.type === 'stitches' || o.type === 'import') return [];
     return [];
+  }
+  function drawXformHandle(o) {
+    if (tool !== 'select' || !o) return;
+    const bb = bbox(o); if (!bb) return;
+    const [x, y] = toPX([bb[0], bb[1]]), [x2, y2] = toPX([bb[2], bb[3]]);
+    ctx.save(); ctx.strokeStyle = 'rgba(76,194,255,.8)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); ctx.strokeRect(x - 6, y - 6, x2 - x + 12, y2 - y + 12); ctx.setLineDash([]);
+    ctx.fillStyle = '#4cc2ff'; ctx.strokeStyle = '#16181d'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.rect(x2 + 6 - 9, y2 + 6 - 9, 18, 18); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2 - 1, y2 + 9); ctx.lineTo(x2 + 9, y2 + 9); ctx.lineTo(x2 + 9, y2 - 1); ctx.stroke();
+    ctx.restore();
   }
   function drawBgSel() {
     if (!bgSel || !doc.bg || tool !== 'select') return;
@@ -493,6 +503,16 @@
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
     if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
+    if (tool === 'select' && !preview && sel()) {
+      const o = sel(), bb = bbox(o);
+      if (bb) {
+        const [hx2, hy2] = toPX([bb[2], bb[3]]);
+        if (Math.hypot(e.offsetX - (hx2 + 6), e.offsetY - (hy2 + 6)) < 24) {
+          const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
+          gesture.type = 'scaleobj'; gesture.orig = JSON.stringify(o); gesture.c = [cx, cy]; gesture.d0 = Math.max(0.5, Math.hypot(p[0] - cx, p[1] - cy)); return;
+        }
+      }
+    }
     if (tool === 'select' && !preview && bgSel && doc.bg) {
       const b = doc.bg, [cx2, cy2] = toPX([b.x + b.w, b.y + b.h]);
       if (Math.hypot(e.offsetX - cx2, e.offsetY - cy2) < 22) { gesture.type = 'resizeimg'; return; }
@@ -524,6 +544,14 @@
       const s = Math.max(0.5, Math.min(120, gesture.v.s * d / gesture.d));
       const mm = [(gesture.c[0] - gesture.v.x) / gesture.v.s, (gesture.c[1] - gesture.v.y) / gesture.v.s];
       view.s = s; view.x = c[0] - mm[0] * s; view.y = c[1] - mm[1] * s; drawNav(); return;
+    }
+    if (gesture.type === 'scaleobj') {
+      const p = toMM(e.offsetX, e.offsetY), o = sel(); if (!o) return;
+      const k = Math.max(0.05, Math.hypot(p[0] - gesture.c[0], p[1] - gesture.c[1]) / gesture.d0);
+      const fresh = JSON.parse(gesture.orig); for (const key in fresh) o[key] = fresh[key];
+      xform(o, k, 0, false, false, gesture.c);
+      gesture.moved = true; gesture.k = k; dragId = o.id; dragMode = 'scale';
+      hint(`${Math.round(k * 100)}%`); draw(); return;
     }
     if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w; const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; doc.width = nw; gesture.moved = true; draw(); return; }
     if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
@@ -567,6 +595,7 @@
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
+    if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); } return; }
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
     if (g.type === 'moveimg') { autosave(); if (window.__imgSheet) renderImageSheet(); return; }
     if (g.type === 'lasso') { const st = stroke; stroke = null; finishLasso(st); return; }
@@ -1156,6 +1185,42 @@
     on('dCancel', () => { draft = null; setTool('select'); });
   }
 
+  // ---------------- transform: scale / rotate / flip any layer about its centre
+  function xform(o, k, rotDeg, fx, fy, center) {
+    const bb = bbox(o); if (!bb) return;
+    const cx = center ? center[0] : (bb[0] + bb[2]) / 2, cy = center ? center[1] : (bb[1] + bb[3]) / 2;
+    const a = (rotDeg || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), sx = fx ? -1 : 1, sy = fy ? -1 : 1;
+    const f = q => { const x = (q[0] - cx) * k * sx, y = (q[1] - cy) * k * sy; q[0] = cx + x * c - y * sn; q[1] = cy + x * sn + y * c; };
+    if (o.type === 'fill') {
+      o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f));
+      if (fx !== fy) o.angle = -(o.angle || 0);
+      o.angle = ((Math.round((o.angle || 0) + (rotDeg || 0)) + 90) % 180 + 180) % 180 - 90;
+      if (fx !== fy) o.paths.forEach(l => l.reverse());
+    } else if (o.type === 'satin') o.points.forEach(q => { f(q); q[2] = (q[2] || o.width || 3) * k; });
+    else if (o.type === 'run') o.points.forEach(f);
+    else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
+    else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f)));
+    else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; o.size *= k; if (o.bend) o.bend /= k; layoutText(o); }
+  }
+  function transformPanel(o) {
+    const bb = bbox(o); if (!bb) return '';
+    const isStitch = o.type === 'import' || o.type === 'stitches', canTurn = o.type !== 'text';
+    return `</div><div class="sec"><h3>Transform</h3>
+      <div class="row"><label>Width</label><input type="number" id="xW" step="0.05" min="0.1" value="${inch(bb[2] - bb[0])}"><span class="val">in</span></div>
+      <div class="row"><label>Height</label><input type="number" id="xH" step="0.05" min="0.1" value="${inch(bb[3] - bb[1])}"><span class="val">in</span></div>
+      <div class="btns" style="margin:4px 0 8px">${btn('xS9', '− 10%', 'sm')}${btn('xS11', '+ 10%', 'sm')}${btn('xS50', '½ size', 'sm')}${btn('xS200', '2×', 'sm')}</div>
+      ${canTurn ? `<div class="btns" style="margin:0 0 8px">${btn('xRl', '⟲ 15°', 'sm')}${btn('xRr', '⟳ 15°', 'sm')}${btn('xR90', '⟳ 90°', 'sm')}${btn('xFh', '⇋ Flip', 'sm')}${btn('xFv', '⇵ Flip', 'sm')}</div>` : '<p class="small" style="margin:0 0 6px">Text resizes here; use Arch and Spacing to shape it.</p>'}
+      <p class="small" style="margin:0">Or drag the blue corner on the canvas to resize.${isStitch ? ' Imported stitches keep their stitch count, so resizing more than about 20% makes them denser or looser — re-digitize for big size changes.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
+  }
+  function bindTransform(o) {
+    const apply = (k, r, fx, fy) => { xform(o, k, r, fx, fy); commit(); renderSheet(); draw(); };
+    const setSize = (axis, inches) => { const bb = bbox(o); if (!bb || !(inches > 0)) return; const cur = axis ? bb[3] - bb[1] : bb[2] - bb[0]; if (cur > 0) apply(inches * IN / cur, 0, false, false); };
+    const w = $('#xW'), h = $('#xH');
+    if (w) { w.addEventListener('change', () => setSize(0, parseFloat(w.value))); h.addEventListener('change', () => setSize(1, parseFloat(h.value))); }
+    on('xS9', () => apply(0.9, 0)); on('xS11', () => apply(1.1, 0)); on('xS50', () => apply(0.5, 0)); on('xS200', () => apply(2, 0));
+    on('xRl', () => apply(1, -15)); on('xRr', () => apply(1, 15)); on('xR90', () => apply(1, 90));
+    on('xFh', () => apply(1, 0, true, false)); on('xFv', () => apply(1, 0, false, true));
+  }
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
     const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]}</h3>`];
@@ -1166,8 +1231,9 @@
       parts[0] = `<div class="sec"><h3>${esc(o.name)} · Imported design</h3><p class="small" style="margin:0 0 6px">${o.blocks.length} threads, kept stitch for stitch. Drag inside the box to move it. Use Sew earlier / later (or Layers) to put it over or under other layers.</p>`;
       parts.push(`<div class="swatches" id="impBlk">${o.blocks.map((bl, i) => `<button class="sw ${i === k ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name)}"></button>`).join('')}</div><p class="small" style="margin:6px 0">Thread ${k + 1}: ${esc(o.blocks[k].name)} — pick a new colour:</p>`);
       parts.push(colorPicker(o.blocks[k].color, c => { o.blocks[k].color = c; if (k === 0) o.color = c; commit(); renderSheet(); draw(); }));
+      parts.push(transformPanel(o));
       parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
-      mount(parts);
+      mount(parts); bindTransform(o);
       $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { renderProps.blk = +b2.dataset.i; renderSheet(); }));
       on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
       on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
@@ -1212,9 +1278,10 @@
       parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tStyle"><button data-v="satin" class="${o.style !== 'fill' ? 'on' : ''}">Satin look</button><button data-v="fill" class="${o.style === 'fill' ? 'on' : ''}">Fill</button></div></div>`);
     }
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
+    parts.push(transformPanel(o));
     parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
-    mount(parts);
+    mount(parts); bindTransform(o);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
@@ -1516,5 +1583,5 @@
   updateUndo();
   setTool('select');
   requestAnimationFrame(() => { resize(); fit(); });
-  window.__ss = { drawNow, zoom: (x, y, f) => { const r = cv.getBoundingClientRect(); view.s *= f; view.x = r.width / 2 - x * view.s; view.y = r.height / 2 - y * view.s; draw(); }, toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
+  window.__ss = { selId: () => selId, tool: () => tool, drawNow, zoom: (x, y, f) => { const r = cv.getBoundingClientRect(); view.s *= f; view.x = r.width / 2 - x * view.s; view.y = r.height / 2 - y * view.s; draw(); }, toPX, draft: () => draft, ptrs: () => pointers.size, doc: () => doc, design, autoDigitize, layoutText, setTool, addObject, exportFile, finishDraft };
 })();

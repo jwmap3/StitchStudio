@@ -7,6 +7,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 ## Tools
 - **Edit points**: after tracing, drag any white dot to adjust the outline (works in Pick and Draw too); in Select, tap an edge to add a point.
 - **Add VP3 / DST file** (menu): opens an embroidery file into the current design as ONE layer (all its threads), kept stitch-for-stitch with jumps skipped; drag to place it, recolour any of its threads, sew it earlier/later to put it over or under other layers.
+- **Transform** (Select → any layer): width/height in inches, −10% / +10% / ½ / 2×, rotate 15° or 90°, flip; or drag the blue corner on the canvas.
 - **Picture**: in Select, tap the picture to select it, drag to move, drag the blue corner to resize; it has its own row in Layers with show/hide.
 - **Panel**: minimise or maximise the tool panel with the arrows on its title bar.
 - **Pick**: tap a colour in your picture (touching area or whole colour) to make a layer, then swipe to set the thread direction (a curved swipe makes the thread curve). Satin look or tatami, density presets down to 0.18 mm.
