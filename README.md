@@ -16,7 +16,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Inches**: inch grid and rulers, image and design size set in inches (menu).
 - **Text**: lettering with arch, satin-look or fill.
 - **Auto**: auto-digitize into thread layers with options: 2–24 colours matched to a 60-colour thread chart (or exact image colours), stitch style Mixed / Satin shine / Tatami, density presets, direction (follow shape / one angle / varied), underlay, pull comp, optional thin or bold outline in any colour, quality, detail and edge smoothing, replace-or-add on re-run.
-- **Thread chart**: every colour picker has 'All 60 threads' with names.
+- **Thread chart & My threads**: every colour picker has "All 60 threads" with names, plus your 7 personal quick-access threads (set them in Pick → My threads → Edit). In Pick, tap one of your threads to stitch new picks in it.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.
 - **Realistic thread view** while you edit (sheen by stitch direction, shadows, fabric texture; toggle in the header) and **Preview** with sew-out slider, fabric colours, stitch count, trims, colours, time.
 

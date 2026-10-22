@@ -27,6 +27,12 @@
     ['#1f3a93','Blue'],['#0b2a5b','Navy'],['#0a1a33','Midnight'],['#00a3ad','Teal'],['#007a78','Dark teal'],['#7fd6c4','Mint'],['#a8e05f','Lime'],['#6abf4b','Kelly green'],['#2e7d32','Green'],['#1b4d2b','Forest'],
     ['#556b2f','Olive'],['#3d4a26','Army green'],['#e0e0e0','Silver gray'],['#c0c0c0','Light gray'],['#9e9e9e','Gray'],['#7a7a7a','Pewter'],['#5a5a5a','Charcoal'],['#3a3a3a','Dark charcoal'],['#1e1e1e','Off black'],['#000000','Black']];
   const nearestThread = hex => { const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; let best = CHART[0], bd = Infinity; for (const c of CHART) { const m = parseInt(c[0].slice(1), 16), dr = (m >> 16 & 255) - r, dg = (m >> 8 & 255) - g, db = (m & 255) - b, rm = (r + (m >> 16 & 255)) / 2; const d = (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db; if (d < bd) { bd = d; best = c; } } return best; };
+  // "My threads": 7 personal quick-access colours, saved on the device
+  const FAV_DEFAULT = ['#000000', '#ffffff', '#c8102e', '#f2a900', '#0b2a5b', '#e35205', '#7a7a7a'];
+  let favs = (() => { try { const v = JSON.parse(localStorage.getItem('ss_favs')); if (Array.isArray(v) && v.length === 7) return v; } catch (e) {} return FAV_DEFAULT.slice(); })();
+  const saveFavs = () => { try { localStorage.setItem('ss_favs', JSON.stringify(favs)); } catch (e) {} };
+  const threadName = hex => { const c = CHART.find(x => x[0] === hex); return c ? c[1] : hex; };
+  let favEdit = -1;   // slot being edited in the Pick panel
   const THREADS = ['#000000', '#ffffff', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#e35205', '#8a5a2b', '#5c3a1e', '#1f3a93', '#0b2a5b', '#2e7d32', '#6abf4b', '#7a7a7a', '#c0c0c0', '#f4a6c1', '#6a2c91', '#00a3ad'];
   let doc = newDoc();
   let tool = 'select', selId = null, selNode = -1, preview = false, progress = 1;
@@ -38,7 +44,7 @@
   let stroke = null;             // live brush stroke
   let drawKind = 'fill';         // Draw tool: fill | satin | run
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
-  const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin' };   // Pick tool
+  const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null };   // Pick tool
   let imgMove = false;           // drag the picture instead of the view
   const IN = 25.4;
   const inch = mm => (mm / IN).toFixed(2);
@@ -241,12 +247,16 @@
       const bb = bbox(o); if (bb) { const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]); ctx.strokeRect(a - 4, b - 4, c - a + 8, d - b + 8); }
     }
     ctx.setLineDash([]);
+    // shrink the dots when points sit close together on screen so they don't hide the shape
+    const NS = shapeNodes(o).map(n => toPX(n.p)); let gap = Infinity;
+    for (let i = 1; i < NS.length; i++) gap = Math.min(gap, Math.hypot(NS[i][0] - NS[i - 1][0], NS[i][1] - NS[i - 1][1]) || Infinity);
+    const dotR = Math.max(2.5, Math.min(7, gap / 2.6));
     if (o.type !== 'text' || true) shapeNodes(o).forEach((n, i) => {
       const [x, y] = toPX(n.p);
-      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2);
       const on = o.type === 'text' ? false : flatIndex(o, n) === selNode;
       ctx.fillStyle = on ? '#f2b134' : '#ffffff'; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = '#16181d'; ctx.stroke();
+      ctx.lineWidth = dotR > 4 ? 2 : 1; ctx.strokeStyle = '#16181d'; ctx.stroke();
     });
     ctx.restore();
   }
@@ -652,7 +662,7 @@
       busy(false);
       if (!r) return;
       const satin = pick.style === 'satin';
-      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + r.col, paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: r.col });
+      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + (pick.thread ? threadName(pick.thread) : r.col), paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: pick.thread || r.col });
       hint('Now swipe across the shape the way the thread should run');
     }, 20);
   }
@@ -880,10 +890,11 @@
   const fmt = (v, step) => step >= 1 ? String(Math.round(v)) : (+v).toFixed(step >= 0.1 ? 1 : 2);
   function colorPicker(cur, onPick) {
     const id = 'cp' + Math.random().toString(36).slice(2, 7);
-    const html = `<div class="swatches" id="${id}">${THREADS.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span><button class="btn sm" data-more="1" style="border-radius:999px">All ${CHART.length} threads ▾</button></div><div class="swatches" id="${id}x" style="display:none;margin-top:8px">${CHART.map(([c, nm]) => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px" aria-label="${nm}" title="${nm}"></button>`).join('')}</div>`;
+    const html = `<div class="small" style="margin:0 0 4px">My threads</div><div class="swatches" style="margin-bottom:8px" id="${id}f">${favs.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" title="${threadName(c)}" aria-label="${threadName(c)}"></button>`).join('')}</div><div class="swatches" id="${id}">${THREADS.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span><button class="btn sm" data-more="1" style="border-radius:999px">All ${CHART.length} threads ▾</button></div><div class="swatches" id="${id}x" style="display:none;margin-top:8px">${CHART.map(([c, nm]) => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px" aria-label="${nm}" title="${nm}"></button>`).join('')}</div>`;
     return { html, bind: () => {
       const box = $('#' + id);
       box.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => onPick(b.dataset.c)));
+      $('#' + id + 'f').querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => onPick(b.dataset.c)));
       const xb = $('#' + id + 'x');
       xb.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { onPick(b.dataset.c); toast(b.title); }));
       box.querySelector('[data-more]').addEventListener('click', e => { const open = xb.style.display === 'none'; xb.style.display = open ? 'flex' : 'none'; e.target.textContent = open ? 'Fewer ▴' : `All ${CHART.length} threads ▾`; });
@@ -933,11 +944,15 @@
     const o = sel();
     const step2 = o && o.type === 'fill';
     hint(!bgImg ? 'Open an image first (menu → Open image)' : step2 ? 'Swipe across the shape to set the thread direction · tap another colour for the next layer' : 'Tap a colour in your picture');
-    const parts = ['<div class="sec"><h3>Pick colour → swipe direction</h3>',
+    const favRow = `<div class="row" style="align-items:flex-start"><label style="padding-top:6px">My threads</label><div style="flex:1"><div class="swatches" id="pkFav">${favs.map((c, i) => `<button class="sw ${favEdit === i ? 'on' : (pick.thread === c && favEdit < 0 ? 'on' : '')}" data-i="${i}" style="background:${c};position:relative" title="${threadName(c)}" aria-label="${threadName(c)}">${favEdit >= 0 ? `<span style="position:absolute;right:-4px;top:-6px;font-size:11px;background:var(--panel2);border-radius:8px;padding:0 4px">${i + 1}</span>` : ''}</button>`).join('')}<button class="btn sm" id="pkFavEdit">${favEdit >= 0 ? 'Done' : 'Edit'}</button></div>
+      <div class="small" style="margin-top:4px">${favEdit >= 0 ? `Slot ${favEdit + 1}: tap a thread below to put it here` : pick.thread ? `New picks use <b>${threadName(pick.thread)}</b> · tap it again to use picture colours` : 'Tap one to stitch your picks in that thread · Edit to choose your 7'}</div></div></div>`;
+    const parts = ['<div class="sec"><h3>Pick colour → swipe direction</h3>', favRow];
+    if (favEdit >= 0) parts.push(`<div class="swatches" id="pkChart" style="margin:4px 0 10px">${CHART.map(([c, nm]) => `<button class="sw ${c === favs[favEdit] ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px" title="${nm}" aria-label="${nm}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);width:30px;height:30px"><input type="color" id="pkFavCustom" value="${favs[favEdit]}"></span></div>`);
+    parts.push(
       `<div class="row"><label>Pick</label><div class="toggle" id="pkScope"><button data-v="area" class="${pick.scope === 'area' ? 'on' : ''}">Touching area</button><button data-v="colour" class="${pick.scope === 'colour' ? 'on' : ''}">Whole colour</button></div></div>`,
       `<div class="row"><label>Stitch</label><div class="toggle" id="pkStyle"><button data-v="satin" class="${pick.style === 'satin' ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${pick.style !== 'satin' ? 'on' : ''}">Tatami</button></div></div>`,
       densityPresets(step2 ? o : null),
-      slider('Tolerance', 'pkt', 5, 120, 1, pick.tol, '', v => pick.tol = v)];
+      slider('Tolerance', 'pkt', 5, 120, 1, pick.tol, '', v => pick.tol = v));
     if (step2) {
       parts.push(`</div><div class="sec"><h3>${esc(o.name || 'Layer')} · ${o.flow ? 'curved flow' : (o.angle || 0) + '°'}</h3>`);
       parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
@@ -947,6 +962,21 @@
     mount(parts);
     const tg = (id, fn) => $('#' + id).querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); }));
     tg('pkScope', v => pick.scope = v);
+    $('#pkFav').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => {
+      const i = +b2.dataset.i, c = favs[i];
+      if (favEdit >= 0) { favEdit = i; renderSheet(); return; }
+      pick.thread = pick.thread === c ? null : c;
+      if (pick.thread && step2) { o.color = c; currentColor = c; commit(); draw(); }
+      if (pick.thread) toast(threadName(c));
+      renderSheet();
+    }));
+    on('pkFavEdit', () => { favEdit = favEdit >= 0 ? -1 : 0; renderSheet(); });
+    const pc = $('#pkChart');
+    if (pc) {
+      const setFav = c => { const old = favs[favEdit]; favs[favEdit] = c; if (pick.thread === old) pick.thread = c; saveFavs(); toast(`Slot ${favEdit + 1}: ${threadName(c)}`); favEdit = Math.min(6, favEdit + 1); renderSheet(); };
+      pc.querySelectorAll('[data-c]').forEach(b2 => b2.addEventListener('click', () => setFav(b2.dataset.c)));
+      $('#pkFavCustom').addEventListener('change', e => setFav(e.target.value));
+    }
     tg('pkStyle', v => { pick.style = v; if (step2) { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; commit(); draw(); } });
     $('#dPre').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.density = +b2.dataset.v; if (step2) { o.spacing = pick.density; commit(); draw(); } renderSheet(); }));
     on('pkNext', () => { selId = null; renderSheet(); draw(); });
