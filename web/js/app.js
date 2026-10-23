@@ -166,7 +166,7 @@
     const fake = objs.map(o => Object.assign({}, o, { __p: pieces(o) }));
     const orig = S.objectPieces;
     S.objectPieces = o => o.__p || orig(o);
-    try { return S.build(fake); } finally { S.objectPieces = orig; }
+    try { return S.build(fake, { knockout: doc.knockout !== false }); } finally { S.objectPieces = orig; }
   }
 
   // ---------------- drawing
@@ -1781,7 +1781,7 @@
   requestAnimationFrame(() => { resize(); fit(); });
   // public interface used by the desktop edition (pc.js)
   window.SS = {
-    doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
+    invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
     setTool, renderSheet, draw, drawNow, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,

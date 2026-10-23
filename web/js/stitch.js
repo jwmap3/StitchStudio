@@ -430,9 +430,9 @@
 
   // ---------- assemble the whole design: ties, trims, colour changes
   // returns {stitches:[{x,y,c}], colors:[hex], ...} c: 0 stitch, 1 jump, 2 trim, 3 color change, 4 end
+  const MASKS = new WeakMap();   // shape coverage grids, reused while a shape is unchanged
   S.build = function (objects, opt) {
     opt = opt || {};
-    const trimAt = opt.trimAt == null ? 2.0 : opt.trimAt;   // mm gap that forces a trim
     const st = [];
     const colors = [];
     let pos = null, curColor = null, needTie = true;
@@ -455,29 +455,111 @@
       for (let i = 1; i <= n; i++) st.push({ x: pos[0] + (p[0] - pos[0]) * i / n, y: pos[1] + (p[1] - pos[1]) * i / n, c: STITCH });
       pos = p;
     };
+    // ---- coverage masks: which areas get stitched over by a shape sewn later.
+    // Used to (1) only let connecting threads run where they'll be buried, otherwise trim,
+    // (2) drop stitching that a later layer completely covers ("remove hidden stitches"),
+    // (3) break any stitch of a fill that strays outside its own shape.
+    const CELL = 0.2, EDGE = 0.4, UNDERLAP = opt.underlap == null ? 0.5 : opt.underlap;
+    const maskOf = o => {
+      if (o.hidden) return null;
+      let loops = null;
+      if (o.type === 'fill' && o.paths) loops = o.paths;
+      else if (o.type === 'text' && o.glyphs) loops = o.glyphs.flatMap(g => g.paths || []);
+      if (!loops || !loops.length) return null;
+      const keyObj = o.type === 'fill' ? o.paths : o.glyphs;
+      const hit = MASKS.get(keyObj); if (hit && hit.ul === UNDERLAP) return hit;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      loops.forEach(l => l.forEach(q => { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }));
+      const pad = 1.0; x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+      const w = Math.max(1, Math.ceil((x1 - x0) / CELL)), h = Math.max(1, Math.ceil((y1 - y0) / CELL));
+      if (w * h > 6e6) return null;
+      const m = new Uint8Array(w * h);
+      const edges = [];
+      loops.forEach(l => { for (let i = 0; i < l.length; i++) { const a = l[i], b = l[(i + 1) % l.length]; if (a[1] !== b[1]) edges.push(a[1] < b[1] ? [a, b] : [b, a]); } });
+      edges.sort((u, v) => u[0][1] - v[0][1]);
+      for (let r = 0; r < h; r++) {
+        const y = y0 + (r + 0.5) * CELL, xs = [];
+        for (const [a, b] of edges) { if (a[1] > y) break; if (y < b[1]) xs.push(a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1])); }
+        xs.sort((u, v) => u - v);
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+          const c0 = Math.max(0, Math.ceil((xs[i] - x0) / CELL - 0.5)), c1 = Math.min(w - 1, Math.floor((xs[i + 1] - x0) / CELL - 0.5));
+          for (let c = c0; c <= c1; c++) m[r * w + c] = 1;
+        }
+      }
+      // square-ish morphology via separable passes
+      const morph = (src, k, grow) => {
+        if (k <= 0) return src;
+        const t = new Uint8Array(w * h), out = new Uint8Array(w * h);
+        for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+          let v = grow ? 0 : 1;
+          for (let d = -k; d <= k; d++) { const cc = c + d; const s2 = cc < 0 || cc >= w ? 0 : src[r * w + cc]; if (grow ? s2 : !s2) { v = grow ? 1 : 0; break; } }
+          t[r * w + c] = v;
+        }
+        for (let c = 0; c < w; c++) for (let r = 0; r < h; r++) {
+          let v = grow ? 0 : 1;
+          for (let d = -k; d <= k; d++) { const rr = r + d; const s2 = rr < 0 || rr >= h ? 0 : t[rr * w + c]; if (grow ? s2 : !s2) { v = grow ? 1 : 0; break; } }
+          out[r * w + c] = v;
+        }
+        return out;
+      };
+      const res = { x0, y0, w, h, ul: UNDERLAP, near: morph(m, Math.round(EDGE / CELL), true), deep: morph(m, Math.round(UNDERLAP / CELL), false) };
+      MASKS.set(keyObj, res);
+      return res;
+    };
+    const look = (mk, p, which) => {
+      if (!mk) return false;
+      const c = Math.floor((p[0] - mk.x0) / CELL), r = Math.floor((p[1] - mk.y0) / CELL);
+      if (c < 0 || r < 0 || c >= mk.w || r >= mk.h) return false;
+      return mk[which][r * mk.w + c] === 1;
+    };
+    const masks = objects.map(maskOf);
+    const knockout = opt.knockout !== false;
+    const hopMax = opt.hopMax == null ? 0.8 : opt.hopMax;   // tiny hops are invisible: sew straight across
+    const laterHas = (oi, p, which) => { for (let j = oi + 1; j < masks.length; j++) if (look(masks[j], p, which)) return true; return false; };
+    const samples = (a, b, step) => { const d = hyp(a, b), n = Math.max(1, Math.ceil(d / step)), out = []; for (let i = 0; i <= n; i++) out.push([a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]); return out; };
     let objIndexStart = [];
+    let oi = -1, removed = 0;
     for (const o of objects) {
-      const pieces = S.objectPieces(o);
+      oi++;
+      let pieces = S.objectPieces(o);
       if (!pieces.length) continue;
+      const own = masks[oi], shaped = !!own;
+      // a connecting line is buried if it stays inside this shape or under a shape sewn later
+      const hidden = (a, b) => samples(a, b, 0.3).every((q, i, arr) => i === 0 || i === arr.length - 1 || look(own, q, 'near') || laterHas(oi, q, 'near'));
+      // split pieces: drop stitches a later layer completely covers; break stitches that stray outside the shape
+      if (knockout || shaped) {
+        const out = [];
+        for (const pc of pieces) {
+          let run = [pc.pts[0]];
+          for (let i = 1; i < pc.pts.length; i++) {
+            const a = pc.pts[i - 1], b = pc.pts[i];
+            const sm = samples(a, b, 0.3);
+            let drop = false;
+            if (knockout && sm.every(q => laterHas(oi, q, 'deep'))) { drop = true; removed++; }
+            else if (shaped && hyp(a, b) > 1.0 && !hidden(a, b)) drop = true;   // would lie loose across the fabric
+            if (drop) { if (run.length > 1) out.push({ pts: run, kind: pc.kind }); run = [b]; }
+            else run.push(b);
+          }
+          if (run.length > 1) out.push({ pts: run, kind: pc.kind });
+        }
+        // if anything was cut out, re-order the fragments so we sew nearby ones together
+        pieces = out.length !== pieces.length ? orderPieces(out) : out;
+        if (!pieces.length) continue;
+      }
       const col = (o.color || '#000000').toLowerCase();
       if (curColor !== col || o.stopBefore) {   // stopBefore: machine pauses (applique fabric placement)
         if (curColor !== null) { trim(); st.push({ x: pos ? pos[0] : 0, y: pos ? pos[1] : 0, c: COLOR }); }
         curColor = col; colors.push({ color: col, name: o.threadName || '' });
       }
       objIndexStart.push({ id: o.id, at: st.length });
-      const inside = (a, b) => {
-        if (o.type !== 'fill') return false;
-        const d = hyp(a, b), n = Math.max(2, Math.ceil(d / 0.4));
-        for (let i = 1; i < n; i++) if (!pointIn([a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n], o.paths)) return false;
-        return true;
-      };
       for (const pc of pieces) {
         const first = pc.pts[0];
         if (pos && !needTie) {
           const d = hyp(pos, first);
-          if (d > trimAt) {
-            // travel with a running stitch hidden inside the same shape instead of trimming
-            if (d < 12 && inside(pos, first)) { const n = Math.ceil(d / 2.0); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
+          if (d > hopMax) {
+            // travel with a running stitch only where it will be buried; otherwise trim so no
+            // stray thread is left lying across the fabric or across other colours
+            if (d < 40 && hidden(pos, first)) { const n = Math.ceil(d / (d < 12 ? 2.0 : 3.0)); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
             else trim();
           }
         }
@@ -488,7 +570,7 @@
     st.push({ x: pos ? pos[0] : 0, y: pos ? pos[1] : 0, c: 4 });
     let n = 0, trims = 0, minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
     st.forEach(s => { if (s.c === 0) { n++; if (s.x < minx) minx = s.x; if (s.y < miny) miny = s.y; if (s.x > maxx) maxx = s.x; if (s.y > maxy) maxy = s.y; } if (s.c === 2) trims++; });
-    return { stitches: st, colors, count: n, trims, bounds: n ? [minx, miny, maxx, maxy] : [0, 0, 0, 0], objIndexStart };
+    return { stitches: st, colors, count: n, trims, removed, bounds: n ? [minx, miny, maxx, maxy] : [0, 0, 0, 0], objIndexStart };
   };
 
   // ---------- writers. Convert to 0.1 mm integer units centred on the design.

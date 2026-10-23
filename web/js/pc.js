@@ -70,6 +70,7 @@
       case 'sheet': worksheet(); break;
       case 'saveas': saveProject(true); break;
       case 'threads': threadModal(); break;
+      case 'knockout': { const d = SS.doc(); d.knockout = d.knockout === false; SS.commit(); SS.invalidate(); syncKnock(); SS.draw(); SS.toast(d.knockout === false ? 'Hidden stitches kept (everything sews)' : 'Stitching that a later layer covers is removed'); break; }
       case 'keys': keysModal(); break;
       case 'picTop': SS.picTop(true); break;
       case 'picBottom': SS.picTop(false); break;
@@ -340,6 +341,8 @@
     SS.Render.draw(g, layers, { s: pxPerMm, x: (m - b[0]) * pxPerMm, y: (m - b[1]) * pxPerMm }, { thread: 0.46 });
     return c;
   }
+  function syncKnock() { const el = document.getElementById('miKnock'); if (el) el.textContent = (SS.doc().knockout === false ? '   ' : '✓ ') + 'Remove hidden stitches'; }
+  setTimeout(syncKnock, 0);
   function exportPNG() {
     SS.busy(true);
     setTimeout(() => {
