@@ -205,7 +205,24 @@
     navT = setTimeout(() => { navFast = false; draw(); }, 140);
     draw();
   }
-  function draw() { updateUndo(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
+  // floating quick buttons on the canvas while a shape is being drawn
+  const fab = document.createElement('div');
+  fab.id = 'draftFab';
+  fab.style.cssText = 'position:absolute;right:12px;bottom:12px;display:none;gap:8px;z-index:6;align-items:center';
+  fab.innerHTML = '<button id="fabUndo" style="width:48px;height:48px;border-radius:50%;border:0;background:#2a2f3a;color:#fff;font-size:22px;box-shadow:0 4px 14px rgba(0,0,0,.45)" aria-label="Undo point">↶</button>' +
+    '<button id="fabDone" style="height:52px;padding:0 20px;border-radius:26px;border:0;background:#f2b134;color:#16181d;font-weight:700;font-size:16px;box-shadow:0 4px 14px rgba(0,0,0,.45)">✓ Stitch it</button>';
+  (cv.parentElement || document.body).appendChild(fab);
+  if (cv.parentElement && getComputedStyle(cv.parentElement).position === 'static') cv.parentElement.style.position = 'relative';
+  fab.querySelector('#fabDone').addEventListener('click', e => { e.stopPropagation(); finishDraft(); });
+  fab.querySelector('#fabUndo').addEventListener('click', e => { e.stopPropagation(); undo(); });
+  ['pointerdown', 'pointerup'].forEach(ev => fab.addEventListener(ev, e => e.stopPropagation()));
+  function updateFab() {
+    const ok = draft && !preview && (draft.type === 'fill' ? draft.loops[0].length >= 3 : draft.points.length >= (draft.rails ? 4 : 2));
+    fab.style.display = draft && !preview ? 'flex' : 'none';
+    const d = fab.querySelector('#fabDone'); d.disabled = !ok; d.style.opacity = ok ? '1' : '.45';
+    d.textContent = draft && draft.rails && draft.closed ? '✓ Stitch loop' : '✓ Stitch it';
+  }
+  function draw() { updateUndo(); updateFab(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
   function drawFromFrame() {
     const r = cv.getBoundingClientRect(), dpr = cv.width / r.width, f = frame.view, k = view.s / f.s;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, cv.width, cv.height);
