@@ -839,6 +839,12 @@
     if (streamMode === 'column') {
       if (streamIns && o && o.type === 'satin' && o.mode === 'rails') { streamIns = false; insertDirLine(o, p); return; }
       if (!draft) { draft = { type: 'satin', points: [], rails: true, stream: true, color: currentColor }; selId = null; }
+      const DP = draft.points, tolF = 14 / view.s;
+      if (DP.length >= 4 && DP.length % 2 === 0) {
+        const last = DP[DP.length - 1], first = DP[0];
+        if (Math.hypot(last[0] - p[0], last[1] - p[1]) < tolF) { finishDraft(); return; }
+        if (DP.length >= 6 && Math.hypot(first[0] - p[0], first[1] - p[1]) < tolF) { draft.closed = true; finishDraft(); return; }
+      }
       draft.points.push([p[0], p[1], doc.satinWidth || 3]);
       hint(draft.points.length % 2 ? 'Now tap straight across, on the other edge' : 'Next pair: tap the first edge a little further along (turn the line to steer the thread)');
       renderSheet(); draw(); return;
@@ -962,11 +968,15 @@
     const o = sel(), isCol = o && o.type === 'satin' && o.mode === 'rails';
     const parts = [`<div class="sec"><h3>Streamline</h3>
       <div class="toggle" id="stMode" style="display:flex;margin-bottom:8px">${[['column', 'Draw column'], ['shape', 'Shape → column'], ['wrap', 'Wrap fill']].map(([k, l]) => `<button data-v="${k}" class="${streamMode === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div>`];
-    if (streamMode === 'column') {
-      hint(draft ? (draft.points.length % 2 ? 'Tap the opposite edge' : 'Tap the next pair — angle each pair the way you want the thread to lie') : 'Tap one edge of the column, then straight across on the other edge. Keep going in pairs.');
+    if (streamMode === 'column' && draft) {
+      hint(draft.points.length % 2 ? 'Tap the opposite edge' : 'Next pair — or tap your last point to finish');
+      parts.push(`<div class="btns" style="margin:0 0 8px">${btn('stDone', '✓ Done — stitch it', 'primary')}${btn('stClose', '⟲ Close loop')}${btn('stBack', '↶ Undo point')}${btn('stCancel', 'Cancel', 'danger')}</div>
+        <p class="small" style="margin:0 0 8px">${Math.floor(draft.points.length / 2)} pair${Math.floor(draft.points.length / 2) === 1 ? '' : 's'} so far. Finish: tap <b>✓ Done</b> or tap your <b>last point</b> again. Tap the <b>first point</b> to close a loop.</p>`);
+      parts.push(colorPicker(draft.color, c => { currentColor = c; draft.color = c; renderSheet(); draw(); }));
+    } else if (streamMode === 'column') {
+      hint(isCol ? '' : 'Tap one edge of the column, then straight across on the other edge. Keep going in pairs.');
       parts.push(`<p class="small" style="margin:0 0 8px">Click pairs of points across the shape — each pair is a <b>direction line</b>. The thread turns smoothly from one line to the next, so around a curve, fan the lines like spokes. Your machine sews the column start (green) to finish (red) in one smooth pass.</p>`);
-      parts.push(colorPicker(draft ? draft.color : (isCol ? o.color : currentColor), c => { currentColor = c; if (draft) draft.color = c; else if (isCol) { o.color = c; commit(); } renderSheet(); draw(); }));
-      if (draft) parts.push(`<div class="btns" style="margin-top:10px">${btn('stDone', '✓ Done', 'primary')}${btn('stClose', '⟲ Close loop & finish')}${btn('stBack', 'Undo point')}${btn('stCancel', 'Cancel', 'danger')}</div>`);
+      parts.push(colorPicker(isCol ? o.color : currentColor, c => { currentColor = c; if (isCol) { o.color = c; commit(); } renderSheet(); draw(); }));
     }
     if (streamMode === 'shape') { hint('Tap a filled shape to turn it into a streamline column'); parts.push(`<p class="small" style="margin:0">Tap a letter, a ring or the border of a number. Rings become a closed column between the outside and inside edges; strokes become a column from tip to tip. Direction lines are placed for you — then drag them to perfect the flow. Tip: ✂ Isolate part first to work on one piece.</p>`); }
     if (streamMode === 'wrap') { hint('Tap a fill to make its thread wrap around the shape'); parts.push(`<p class="small" style="margin:0">Quick option for borders and outlines: the thread turns with the shape automatically (no points to place).</p>`); }
