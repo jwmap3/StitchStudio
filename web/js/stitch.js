@@ -354,32 +354,98 @@
   }
 
   // point–counterpoint satin: taps alternate between the two edges (rails)
+  // ---------- STREAMLINE column (point pairs). Every pair the user places is a direction line;
+  // between two pairs the stitch angle turns smoothly from one to the next, so corners fan
+  // like hand digitizing. Rails are smooth curves through the points. Closed columns loop
+  // back to the first pair (rings, the bowl of a letter).
+  function catmull(P, closed, sub) {
+    // returns per-segment polylines (segment i goes from P[i] to P[i+1])
+    const n = P.length, segs = [];
+    const get = i => closed ? P[(i + n) % n] : P[Math.max(0, Math.min(n - 1, i))];
+    const m = closed ? n : n - 1;
+    for (let i = 0; i < m; i++) {
+      const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2), seg = [];
+      // centripetal-ish tension keeps straight runs straight
+      for (let k = 0; k <= sub; k++) {
+        const t = k / sub, t2 = t * t, t3 = t2 * t;
+        const f = j => 0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3);
+        seg.push([f(0), f(1)]);
+      }
+      segs.push(seg);
+    }
+    return segs;
+  }
   function railSatin(o) {
-    const P = o.points;
-    const Lr = P.filter((_, i) => i % 2 === 0).map(p => [p[0], p[1]]), Rr = P.filter((_, i) => i % 2 === 1).map(p => [p[0], p[1]]);
-    if (Lr.length < 2 || Rr.length < 2) return [];
-    const sm = r => r.length >= 3 ? smooth(r, false, 10).map(q => [q[0], q[1]]) : r;
-    const A = sm(Lr), B = sm(Rr);
-    const param = R => { const c = [0]; for (let i = 1; i < R.length; i++) c.push(c[i - 1] + hyp(R[i - 1], R[i])); return c; };
-    const ca = param(A), cb = param(B);
-    const at = (R, c, t) => { const s = t * c[c.length - 1]; let i = 1; while (i < c.length - 1 && c[i] < s) i++; const d = (c[i] - c[i - 1]) || 1, f = Math.max(0, Math.min(1, (s - c[i - 1]) / d)); return [R[i - 1][0] + (R[i][0] - R[i - 1][0]) * f, R[i - 1][1] + (R[i][1] - R[i - 1][1]) * f]; };
-    const len = (ca[ca.length - 1] + cb[cb.length - 1]) / 2;
+    const P = o.points || [];
+    const m = Math.floor(P.length / 2);
+    if (m < 2) return [];
+    const A = [], B = [];
+    for (let i = 0; i < m; i++) { A.push([P[2 * i][0], P[2 * i][1]]); B.push([P[2 * i + 1][0], P[2 * i + 1][1]]); }
+    const closed = !!o.closed && m >= 3;
+    const curve = o.curve !== false;
+    const SA = curve ? catmull(A, closed, 12) : (closed ? A.map((p, i) => [p, A[(i + 1) % m]]) : A.slice(1).map((p, i) => [A[i], p]));
+    const SB = curve ? catmull(B, closed, 12) : (closed ? B.map((p, i) => [p, B[(i + 1) % m]]) : B.slice(1).map((p, i) => [B[i], p]));
+    const plen = seg => { let L = 0; for (let i = 1; i < seg.length; i++) L += hyp(seg[i - 1], seg[i]); return L; };
+    const pt = (seg, L, u) => { let s = u * L; for (let i = 1; i < seg.length; i++) { const d = hyp(seg[i - 1], seg[i]); if (s <= d || i === seg.length - 1) { const f = d ? Math.min(1, s / d) : 0; return [seg[i - 1][0] + (seg[i][0] - seg[i - 1][0]) * f, seg[i - 1][1] + (seg[i][1] - seg[i - 1][1]) * f]; } s -= d; } return seg[seg.length - 1]; };
     const sp = Math.max(0.15, o.spacing || 0.4), pc = o.pullComp == null ? 0.15 : o.pullComp;
-    const pair = t => { const a = at(A, ca, t), b = at(B, cb, t); const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1; return [[a[0] - dx / d * pc, a[1] - dy / d * pc], [b[0] + dx / d * pc, b[1] + dy / d * pc], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], d]; };
+    const maxW = o.splitAt || 8;
+    // cross lines (a -> b) along the whole column, spaced on the longer rail
+    const cross = [];   // [a, b, shortSide(0 none, 1 a-side, 2 b-side)]
+    for (let i = 0; i < SA.length; i++) {
+      const La = plen(SA[i]), Lb = plen(SB[i]), Lm = Math.max(La, Lb, 0.01);
+      const k = Math.max(1, Math.round(Lm / (sp / 2)));
+      const fan = Math.min(La, Lb) / Lm < 0.6;   // tight turn: inner side gets short stitches
+      const inner = La < Lb ? 1 : 2;
+      for (let j = (i === 0 ? 0 : 1); j <= k; j++) {
+        const u = j / k;
+        cross.push([pt(SA[i], La, u), pt(SB[i], Lb, u), fan ? inner : 0]);
+      }
+    }
     const pieces = [];
-    if (o.underlay !== false) {
-      const n = Math.max(1, Math.round(len / 2)); const cen = [];
-      for (let i = 0; i <= n; i++) cen.push(pair(i / n)[2]);
+    const mid = c => [(c[0][0] + c[1][0]) / 2, (c[0][1] + c[1][1]) / 2];
+    if (o.underlay !== false && cross.length > 2) {
+      // centre walk out, edge zig-zag back: the usual satin underlay
+      const cen = []; let acc = Infinity;
+      for (let i = 0; i < cross.length; i++) { const q = mid(cross[i]); if (!cen.length || hyp(cen[cen.length - 1], q) >= 2 || i === cross.length - 1) cen.push(q); }
       pieces.push({ pts: cen, kind: 'underlay' });
-      const zz = []; const m = Math.max(2, Math.round(len / 0.9));
-      for (let i = m; i >= 0; i--) { const q = pair(i / m); const f = 0.2; const a = [q[0][0] + (q[2][0] - q[0][0]) * f * 2, q[0][1] + (q[2][1] - q[0][1]) * f * 2], b = [q[1][0] + (q[2][0] - q[1][0]) * f * 2, q[1][1] + (q[2][1] - q[1][1]) * f * 2]; zz.push(i % 2 ? a : b); }
+      const zz = []; let last = null, side = 0;
+      for (let i = cross.length - 1; i >= 0; i--) {
+        const c = cross[i], q = mid(c);
+        if (last && hyp(last, q) < 0.9 && i !== 0) continue;
+        const e = side ? c[1] : c[0], f = 0.25;
+        zz.push([e[0] + (q[0] - e[0]) * f * 2, e[1] + (q[1] - e[1]) * f * 2]); side ^= 1; last = q;
+      }
       pieces.push({ pts: zz, kind: 'underlay' });
     }
-    const top = []; const n = Math.max(2, Math.round(len / (sp / 2)));
-    for (let i = 0; i <= n; i++) { const q = pair(i / n); top.push(i % 2 ? q[1] : q[0]); }
+    // top satin: zig-zag a, b, a, b ... with pull compensation, short stitches on tight turns,
+    // and a split penetration for very wide columns so no thread is left long and loose
+    const top = [];
+    let shortFlip = 0;
+    for (let i = 0; i < cross.length; i++) {
+      const [a0, b0, sh] = cross[i];
+      const dx = b0[0] - a0[0], dy = b0[1] - a0[1], d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+      let a = [a0[0] - ux * pc, a0[1] - uy * pc], b = [b0[0] + ux * pc, b0[1] + uy * pc];
+      const toA = i % 2 === 0;           // which edge this penetration lands on
+      if (sh && ((toA && sh === 1) || (!toA && sh === 2))) {
+        shortFlip ^= 1;
+        if (shortFlip) { const f = 0.4; if (toA) a = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; else b = [b[0] + (a[0] - b[0]) * f, b[1] + (a[1] - b[1]) * f]; }
+      }
+      if (d > maxW && top.length) {
+        const f = 0.5 + (i % 4 < 2 ? 0.12 : -0.12);
+        top.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+      }
+      top.push(toA ? a : b);
+    }
     pieces.push({ pts: top, kind: 'top' });
     return pieces;
   }
+  S.streamRails = (o) => {
+    const P = o.points || [], m = Math.floor(P.length / 2); if (m < 2) return null;
+    const A = [], B = []; for (let i = 0; i < m; i++) { A.push([P[2 * i][0], P[2 * i][1]]); B.push([P[2 * i + 1][0], P[2 * i + 1][1]]); }
+    const closed = !!o.closed && m >= 3;
+    const flat = segs => segs.reduce((acc, s, i) => acc.concat(i ? s.slice(1) : s), []);
+    return { A: o.curve === false ? A : flat(catmull(A, closed, 12)), B: o.curve === false ? B : flat(catmull(B, closed, 12)), closed };
+  };
 
   function satinObject(o) {
     if (o.mode === 'rails') return railSatin(o);

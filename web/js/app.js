@@ -38,6 +38,8 @@
   let tool = 'select', selId = null, selNode = -1, preview = false, progress = 1;
   let draft = null;              // shape being drawn {type, loops|points}
   const brush = { mode: 'satin', size: 3, passes: 1 };   // stitch brushes
+  let streamMode = 'column';     // Streamline: 'column' (point pairs) | 'shape' (convert a fill) | 'wrap'
+  let streamIns = false;         // next tap adds a direction line to the selected column
   let satinMode = 'center';      // 'center' | 'rails' (point–counterpoint)
   let fillMode = 'points';       // 'points' | 'quick' (Quick Draw)
   let quickTol = 40;
@@ -349,7 +351,8 @@
       }
     }
     if (o.type === 'fill' && o.flow) { ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2.5; o.flow.forEach(g => { ctx.beginPath(); g.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); const a = g[g.length - 2] || g[0], b = g[g.length - 1], [bx, by] = toPX(b), [ax, ay] = toPX(a), an = Math.atan2(by - ay, bx - ax); ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an - .5), by - 10 * Math.sin(an - .5)); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an + .5), by - 10 * Math.sin(an + .5)); ctx.stroke(); }); ctx.restore(); }
-    if (o.type === 'satin' || o.type === 'run') {
+    if (o.type === 'satin' && o.mode === 'rails') { ctx.restore(); ctx.save(); drawColumnGuide(o, false); }
+    else if (o.type === 'satin' || o.type === 'run') {
       ctx.beginPath(); o.points.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
       if (o.type === 'satin' && o.mode !== 'rails') {
         ctx.setLineDash([]); ctx.strokeStyle = 'rgba(242,177,52,.5)';
@@ -368,7 +371,7 @@
       const [x, y] = toPX(n.p);
       ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2);
       const on = o.type === 'text' ? false : flatIndex(o, n) === selNode;
-      ctx.fillStyle = on ? '#f2b134' : '#ffffff'; ctx.fill();
+      ctx.fillStyle = on ? '#f2b134' : (o.type === 'satin' && o.mode === 'rails' ? (i % 2 ? '#2f6bff' : '#1530c8') : '#ffffff'); ctx.fill();
       ctx.lineWidth = dotR > 4 ? 2 : 1; ctx.strokeStyle = '#16181d'; ctx.stroke();
     });
     ctx.restore();
@@ -397,6 +400,37 @@
   function flatIndex(o, n) { if (o.type !== 'fill') return n.pi; let k = 0; for (let i = 0; i < n.li; i++) k += o.paths[i].length; return k + n.pi; }
   function nodeAt(o, k) { if (o.type !== 'fill') return { li: 0, pi: k }; for (let li = 0; li < o.paths.length; li++) { if (k < o.paths[li].length) return { li, pi: k }; k -= o.paths[li].length; } return null; }
 
+  // Streamline guide: the column body, both edges and every direction line (pair of points)
+  function drawColumnGuide(o, isDraft) {
+    const P = o.points, m = Math.floor(P.length / 2);
+    ctx.save(); ctx.setLineDash([]);
+    if (m >= 2) {
+      const R = S.streamRails({ points: P.slice(0, m * 2), closed: o.closed, curve: o.curve });
+      if (R) {
+        ctx.beginPath();
+        R.A.forEach((q, i) => { const [x, y] = toPX(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        if (R.closed) { ctx.closePath(); const [x0, y0] = toPX(R.B[0]); ctx.moveTo(x0, y0); R.B.forEach((q, i) => { const [x, y] = toPX(q); ctx.lineTo(x, y); }); ctx.closePath(); }
+        else for (let i = R.B.length - 1; i >= 0; i--) { const [x, y] = toPX(R.B[i]); ctx.lineTo(x, y); }
+        if (!R.closed) ctx.closePath();
+        if (isDraft) { ctx.fillStyle = hexA(o.color || currentColor, 0.55); ctx.fill('evenodd'); }
+        ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.2; ctx.stroke();
+      }
+    }
+    // direction lines
+    ctx.lineWidth = 2; ctx.strokeStyle = '#1b2a6b';
+    for (let i = 0; i + 1 < P.length; i += 2) { const [x1, y1] = toPX(P[i]), [x2, y2] = toPX(P[i + 1]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+    if (P.length % 2) { const [x1, y1] = toPX(P[P.length - 1]); ctx.setLineDash([4, 4]); ctx.strokeStyle = '#4cc2ff'; ctx.beginPath(); ctx.arc(x1, y1, 10, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+    P.forEach((q, i) => { const [x, y] = toPX(q); ctx.beginPath(); ctx.arc(x, y, isDraft ? 5.5 : 4.5, 0, 7); ctx.fillStyle = i % 2 ? '#2f6bff' : '#1530c8'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2; ctx.stroke(); });
+    // where the machine starts and finishes this column
+    if (m >= 2) {
+      const mid = k => [(P[2 * k][0] + P[2 * k + 1][0]) / 2, (P[2 * k][1] + P[2 * k + 1][1]) / 2];
+      const s0 = toPX(mid(0)), s1 = toPX(mid(o.closed ? 0 : m - 1)), s2 = toPX(mid(1));
+      ctx.fillStyle = '#21c36b'; ctx.beginPath(); ctx.arc(s0[0], s0[1], 7, 0, 7); ctx.fill();
+      const an = Math.atan2(s2[1] - s0[1], s2[0] - s0[0]); ctx.strokeStyle = '#21c36b'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(s0[0], s0[1]); ctx.lineTo(s0[0] + Math.cos(an) * 22, s0[1] + Math.sin(an) * 22); ctx.lineTo(s0[0] + Math.cos(an) * 22 - 7 * Math.cos(an - .5), s0[1] + Math.sin(an) * 22 - 7 * Math.sin(an - .5)); ctx.moveTo(s0[0] + Math.cos(an) * 22, s0[1] + Math.sin(an) * 22); ctx.lineTo(s0[0] + Math.cos(an) * 22 - 7 * Math.cos(an + .5), s0[1] + Math.sin(an) * 22 - 7 * Math.sin(an + .5)); ctx.stroke();
+      if (!o.closed) { ctx.fillStyle = '#ff4d4d'; ctx.fillRect(s1[0] - 6, s1[1] - 6, 12, 12); }
+    }
+    ctx.restore();
+  }
   function drawDraft() {
     if (stroke && stroke.length && tool === 'fill') {
       ctx.save(); ctx.lineJoin = 'round'; ctx.beginPath();
@@ -422,6 +456,8 @@
         ctx.stroke();
         l.forEach((p, i) => { const [x, y] = toPX(p); ctx.beginPath(); ctx.arc(x, y, i === 0 ? 9 : 5, 0, 7); ctx.fillStyle = i === 0 ? '#f2b134' : '#fff'; ctx.fill(); });
       });
+    } else if (draft.rails) {
+      drawColumnGuide(draft, true);
     } else {
       ctx.beginPath(); draft.points.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
       draft.points.forEach(p => {
@@ -485,6 +521,7 @@
       const o = doc.objects[i]; if (o.hidden) continue;
       if (o.type === 'fill' && pointInLoops(p, o.paths)) return o;
       if (o.type === 'text' || o.type === 'stitches' || o.type === 'import') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
+      if (o.type === 'satin' && o.mode === 'rails') { const R = S.streamRails(o); if (R && (R.closed ? (pointInLoops(p, [R.A, R.B])) : pointInLoops(p, [R.A.concat(R.B.slice().reverse())]))) return o; continue; }
       if (o.type === 'satin' && distToPolyline(p, o.points) < Math.max(tol, (o.points[0] && o.points[0][2] || 3) / 2)) return o;
       if (o.type === 'run' && distToPolyline(p, o.points) < tol) return o;
     }
@@ -621,7 +658,7 @@
         if (hitObject(p) === o) { gesture.type = 'moveobj'; gesture.last = p; return; }
       }
     }
-    if (draft && (tool === 'fill' || tool === 'satin' || tool === 'run')) {
+    if (draft && (tool === 'fill' || tool === 'satin' || tool === 'run' || tool === 'stream')) {
       // drag an existing draft node
       const list = draft.type === 'fill' ? draft.loops[draft.loops.length - 1] : draft.points;
       const tol = 16 / view.s;
@@ -752,6 +789,7 @@
       if (l.length >= 3 && Math.hypot(l[0][0] - p[0], l[0][1] - p[1]) < 14 / view.s) { finishDraft(); return; }
       l.push([p[0], p[1]]); renderSheet(); draw(); return;
     }
+    if (tool === 'stream') { streamTap(p); return; }
     if (tool === 'satin') { if (!draft) draft = { type: 'satin', points: [], rails: satinMode === 'rails' }; draft.points.push([p[0], p[1], doc.satinWidth]); if (draft.rails) hint(draft.points.length % 2 ? 'Now tap the opposite edge' : 'Tap the first edge again, a little further along'); renderSheet(); draw(); return; }
     if (tool === 'run') { if (!draft) draft = { type: 'run', points: [] }; draft.points.push([p[0], p[1]]); renderSheet(); draw(); return; }
     if (tool === 'text') { textAt = p; renderSheet(); draw(); return; }
@@ -785,12 +823,182 @@
     } else if (draft.type === 'satin') {
       if (draft.points.length < (draft.rails ? 4 : 2)) { toast(draft.rails ? 'Tap at least 2 pairs of edge points' : 'A satin column needs at least 2 points'); return; }
       if (draft.rails && draft.points.length % 2) draft.points.pop();
-      addObject(Object.assign({ type: 'satin', name: draft.rails ? 'Satin (point–counterpoint)' : 'Satin', points: draft.points, spacing: 0.4, underlay: true, pullComp: 0.15 }, draft.rails ? { mode: 'rails' } : {}));
+      const wasStream = !!draft.stream;
+      addObject(Object.assign({ type: 'satin', name: draft.stream ? 'Streamline column' : draft.rails ? 'Satin (point–counterpoint)' : 'Satin', points: draft.points, spacing: 0.4, underlay: true, pullComp: 0.15 }, draft.rails ? { mode: 'rails' } : {}, draft.closed ? { closed: true } : {}));
+      if (wasStream) { draft = null; setTool('stream', true); toast('Column made — drag any blue point to fine-tune the flow'); return; }
     } else {
       if (draft.points.length < 2) { toast('A line needs at least 2 points'); return; }
       addObject({ type: 'run', name: 'Line', points: draft.points, stitchLen: 2.5, passes: 1, curve: true });
     }
     draft = null; setTool('select', true);
+  }
+
+  // ---------------- STREAMLINE: digitize with point pairs, like pro software
+  function streamTap(p) {
+    const o = sel();
+    if (streamMode === 'column') {
+      if (streamIns && o && o.type === 'satin' && o.mode === 'rails') { streamIns = false; insertDirLine(o, p); return; }
+      if (!draft) { draft = { type: 'satin', points: [], rails: true, stream: true, color: currentColor }; selId = null; }
+      draft.points.push([p[0], p[1], doc.satinWidth || 3]);
+      hint(draft.points.length % 2 ? 'Now tap straight across, on the other edge' : 'Next pair: tap the first edge a little further along (turn the line to steer the thread)');
+      renderSheet(); draw(); return;
+    }
+    const hit = hitObject(p);
+    if (streamMode === 'wrap') {
+      if (!hit || hit.type !== 'fill') { toast('Tap a filled shape'); return; }
+      hit.wrap = !hit.wrap; if (hit.wrap) { delete hit.flow; if (!hit.satinLook) { hit.satinLook = true; hit.stitchLen = 12; hit.pullComp = 0.15; } }
+      selId = hit.id; commit(); renderSheet(); draw(); toast(hit.wrap ? 'Thread now wraps around this shape' : 'Back to a straight angle'); return;
+    }
+    if (streamMode === 'shape') {
+      if (!hit || hit.type !== 'fill') { toast('Tap a filled shape (a letter, a ring, a number border)'); return; }
+      shapeToColumns(hit, p);
+    }
+  }
+  function insertDirLine(o, p) {
+    const P = o.points, m = Math.floor(P.length / 2), segs = o.closed ? m : m - 1;
+    let best = -1, bu = 0.5, bd = Infinity;
+    for (let i = 0; i < segs; i++) {
+      const j = (i + 1) % m, A0 = P[2 * i], B0 = P[2 * i + 1], A1 = P[2 * j], B1 = P[2 * j + 1];
+      const c0 = [(A0[0] + B0[0]) / 2, (A0[1] + B0[1]) / 2], c1 = [(A1[0] + B1[0]) / 2, (A1[1] + B1[1]) / 2];
+      const vx = c1[0] - c0[0], vy = c1[1] - c0[1], L2 = vx * vx + vy * vy || 1e-9;
+      const u = Math.max(0.05, Math.min(0.95, ((p[0] - c0[0]) * vx + (p[1] - c0[1]) * vy) / L2));
+      const inQuad = pointInLoops(p, [[A0, A1, B1, B0]]);
+      const d = inQuad ? 0 : Math.hypot(c0[0] + vx * u - p[0], c0[1] + vy * u - p[1]);
+      if (d < bd) { bd = d; best = i; bu = u; }
+    }
+    if (best < 0) return;
+    // place the new pair on the smooth edges (not a straight cut between the old points)
+    const R = S.streamRails(o), k = best * 12 + Math.round(bu * 12);
+    const j = (best + 1) % m, L = (a, b) => [a[0] + (b[0] - a[0]) * bu, a[1] + (b[1] - a[1]) * bu, a[2] || 3];
+    const nA = R && o.curve !== false && R.A[k] ? [R.A[k][0], R.A[k][1], 3] : L(P[2 * best], P[2 * j]);
+    const nB = R && o.curve !== false && R.B[k] ? [R.B[k][0], R.B[k][1], 3] : L(P[2 * best + 1], P[2 * j + 1]);
+    P.splice(2 * (best + 1), 0, nA, nB);
+    selNode = 2 * (best + 1); commit(); renderSheet(); draw(); toast('Direction line added — drag its ends to steer the thread');
+  }
+  // turn a filled shape into streamline columns: rings (letter bowls, outlines) become a closed
+  // column between the outside and inside edges; strokes (an l, an S, a swoosh) become a column
+  // between their two tips. Direction lines are placed for you and stay editable.
+  function shapeToColumns(o, p) {
+    const L = o.paths.filter(l => l.length >= 3);
+    const inside = (q, l) => S.pointIn(q, [l]);
+    const depth = L.map((l, i) => L.reduce((d, m2, j) => d + (j !== i && inside(l[0], m2) ? 1 : 0), 0));
+    let oi = -1;
+    L.forEach((l, i) => { if (depth[i] % 2 === 0 && inside(p, l) && (oi < 0 || Math.abs(T.area(l)) < Math.abs(T.area(L[oi])))) oi = i; });
+    if (oi < 0) { toast('Tap inside the shape'); return; }
+    const outer = L[oi], holes = L.filter((l, i) => i !== oi && depth[i] === depth[oi] + 1 && inside(l[0], outer));
+    if (holes.length > 1) { toast('That piece has more than one hole — isolate a simpler part or draw it with Column'); return; }
+    const perim = l => l.reduce((t, q, i) => t + Math.hypot(q[0] - l[(i + 1) % l.length][0], q[1] - l[(i + 1) % l.length][1]), 0);
+    const resample = (l, n, closed) => { const R = S.resamplePolyline(l, Math.max(0.2, (closed ? perim(l) : l.reduce((t, q, i) => i ? t + Math.hypot(q[0] - l[i - 1][0], q[1] - l[i - 1][1]) : 0, 0)) / n), closed); return R; };
+    const at = (R, f) => { // point at arc-length fraction f along open polyline R
+      const c = [0]; for (let i = 1; i < R.length; i++) c.push(c[i - 1] + Math.hypot(R[i][0] - R[i - 1][0], R[i][1] - R[i - 1][1]));
+      const s2 = f * c[c.length - 1]; let i = 1; while (i < c.length - 1 && c[i] < s2) i++;
+      const d = (c[i] - c[i - 1]) || 1, t = Math.max(0, Math.min(1, (s2 - c[i - 1]) / d)); return [R[i - 1][0] + (R[i][0] - R[i - 1][0]) * t, R[i - 1][1] + (R[i][1] - R[i - 1][1]) * t];
+    };
+    let pts = [], closed = false;
+    if (holes.length === 1) {
+      // ring: walk both edges the same way round, starting opposite each other
+      let O = outer.slice(), H = holes[0].slice();
+      if (Math.sign(T.area(O)) !== Math.sign(T.area(H))) H.reverse();
+      let k0 = 0, bd = Infinity; H.forEach((q, i) => { const d = Math.hypot(q[0] - O[0][0], q[1] - O[0][1]); if (d < bd) { bd = d; k0 = i; } });
+      H = H.slice(k0).concat(H.slice(0, k0));
+      const Oc = O.concat([O[0]]), Hc = H.concat([H[0]]);
+      const n = Math.max(8, Math.round(perim(O) / 3));
+      // pair each outside point with the closest inside point, keeping the order going round
+      // (so direction lines never cross), then even out the spacing a little
+      const Hs = S.resamplePolyline(Hc, 0.25, false), cum = [0];
+      for (let i = 1; i < Hs.length; i++) cum.push(cum[i - 1] + Math.hypot(Hs[i][0] - Hs[i - 1][0], Hs[i][1] - Hs[i - 1][1]));
+      const tot = cum[cum.length - 1] || 1;
+      const ts = [];
+      for (let i = 0; i < n; i++) {
+        const a = at(Oc, i / n); let bk = 0, bd = Infinity;
+        Hs.forEach((q, k) => { const d = Math.hypot(q[0] - a[0], q[1] - a[1]); if (d < bd) { bd = d; bk = k; } });
+        let t = cum[bk] / tot;
+        if (i === 0 && t > 0.5) t -= 1;                      // start near zero
+        const prev = ts.length ? ts[ts.length - 1] : -1;
+        while (ts.length && t < prev - 0.5) t += 1;           // unwrap
+        ts.push(Math.max(t, prev + 1e-4));
+      }
+      // keep inside the first lap and blend toward even spacing where nearest-point jumps
+      for (let pass = 0; pass < 2; pass++) for (let i = 1; i < n - 1; i++) ts[i] = Math.max(ts[i - 1] + 1e-4, (ts[i - 1] + 2 * ts[i] + ts[i + 1]) / 4);
+      for (let i = 0; i < n; i++) {
+        const a = at(Oc, i / n), t = ((ts[i] % 1) + 1) % 1, b = at(Hs, t);
+        pts.push([a[0], a[1], 3], [b[0], b[1], 3]);
+      }
+      closed = true;
+    } else {
+      // stroke: find its two tips by walking the inside of the shape (geodesic farthest points)
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; outer.forEach(q => { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); });
+      const c = Math.max(0.2, Math.max(x1 - x0, y1 - y0) / 300), w = Math.ceil((x1 - x0) / c) + 3, h = Math.ceil((y1 - y0) / c) + 3, n2 = w * h;
+      const M = new Uint8Array(n2);
+      for (let r = 0; r < h; r++) { const y = y0 + (r - 1) * c, xs = []; for (let i = 0; i < outer.length; i++) { const a = outer[i], b = outer[(i + 1) % outer.length]; if ((a[1] > y) !== (b[1] > y)) xs.push(a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1])); } xs.sort((u, v) => u - v); for (let k = 0; k + 1 < xs.length; k += 2) for (let q = Math.max(0, Math.ceil((xs[k] - x0) / c + 1)); q <= Math.min(w - 1, Math.floor((xs[k + 1] - x0) / c + 1)); q++) M[r * w + q] = 1; }
+      const far = s0 => { const D = new Float32Array(n2).fill(Infinity); D[s0] = 0; const Q = [s0]; let qi = 0, best2 = s0;
+        while (qi < Q.length) { const i = Q[qi++]; const x = i % w, y = (i - x) / w; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue; const j = yy * w + xx; if (!M[j]) continue; const nd = D[i] + (dx && dy ? 1.414 : 1); if (nd < D[j] - 1e-6) { D[j] = nd; Q.push(j); if (nd > D[best2]) best2 = j; } } }
+        return best2; };
+      let start = -1; for (let i = 0; i < n2; i++) if (M[i]) { start = i; break; }
+      if (start < 0) { toast('Shape too small'); return; }
+      const ta = far(start), tb = far(ta);
+      const toMMc = i => { const x = i % w, y = (i - x) / w; return [x0 + (x - 1) * c, y0 + (y - 1) * c]; };
+      const pa = toMMc(ta), pb = toMMc(tb);
+      const R = S.resamplePolyline(outer, 0.4, true);
+      const near = q => { let k = 0, bd = Infinity; R.forEach((r, i) => { const d = Math.hypot(r[0] - q[0], r[1] - q[1]); if (d < bd) { bd = d; k = i; } }); return k; };
+      let ia = near(pa), ib = near(pb); if (ia === ib) { toast('Could not find the two ends of this stroke — draw it with Column'); return; }
+      const arc = (i, j) => { const out = []; for (let k = i; ; k = (k + 1) % R.length) { out.push(R[k]); if (k === j) break; } return out; };
+      const s1 = arc(ia, ib), s2 = arc(ib, ia).reverse();
+      const len = l => l.reduce((t, q, i) => i ? t + Math.hypot(q[0] - l[i - 1][0], q[1] - l[i - 1][1]) : 0, 0);
+      const n = Math.max(3, Math.round(Math.max(len(s1), len(s2)) / 3));
+      for (let i = 0; i <= n; i++) { const f = 0.02 + 0.96 * i / n, a = at(s1, f), b = at(s2, f); pts.push([a[0], a[1], 3], [b[0], b[1], 3]); }
+    }
+    const col = { type: 'satin', mode: 'rails', name: (o.name || 'Shape').replace(/ · (satin|tatami).*$/, '') + ' · streamline', points: pts, closed: closed || undefined, spacing: 0.4, underlay: true, pullComp: 0.15, color: o.color, threadName: o.threadName };
+    // take the piece out of the fill; drop the fill if nothing is left
+    const used = [outer].concat(holes);
+    o.paths = o.paths.filter(l => !used.includes(l));
+    const at0 = doc.objects.indexOf(o);
+    col.id = doc.nextId++;
+    if (!o.paths.length) doc.objects.splice(at0, 1, col); else doc.objects.splice(at0 + 1, 0, col);
+    selId = col.id; selNode = -1; commit(); renderSheet(); draw();
+    toast(`Streamline column with ${pts.length / 2} direction lines — drag the blue points or add lines to steer the thread`);
+  }
+  function renderStreamSheet() {
+    const o = sel(), isCol = o && o.type === 'satin' && o.mode === 'rails';
+    const parts = [`<div class="sec"><h3>Streamline</h3>
+      <div class="toggle" id="stMode" style="display:flex;margin-bottom:8px">${[['column', 'Draw column'], ['shape', 'Shape → column'], ['wrap', 'Wrap fill']].map(([k, l]) => `<button data-v="${k}" class="${streamMode === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div>`];
+    if (streamMode === 'column') {
+      hint(draft ? (draft.points.length % 2 ? 'Tap the opposite edge' : 'Tap the next pair — angle each pair the way you want the thread to lie') : 'Tap one edge of the column, then straight across on the other edge. Keep going in pairs.');
+      parts.push(`<p class="small" style="margin:0 0 8px">Click pairs of points across the shape — each pair is a <b>direction line</b>. The thread turns smoothly from one line to the next, so around a curve, fan the lines like spokes. Your machine sews the column start (green) to finish (red) in one smooth pass.</p>`);
+      parts.push(colorPicker(draft ? draft.color : (isCol ? o.color : currentColor), c => { currentColor = c; if (draft) draft.color = c; else if (isCol) { o.color = c; commit(); } renderSheet(); draw(); }));
+      if (draft) parts.push(`<div class="btns" style="margin-top:10px">${btn('stDone', '✓ Done', 'primary')}${btn('stClose', '⟲ Close loop & finish')}${btn('stBack', 'Undo point')}${btn('stCancel', 'Cancel', 'danger')}</div>`);
+    }
+    if (streamMode === 'shape') { hint('Tap a filled shape to turn it into a streamline column'); parts.push(`<p class="small" style="margin:0">Tap a letter, a ring or the border of a number. Rings become a closed column between the outside and inside edges; strokes become a column from tip to tip. Direction lines are placed for you — then drag them to perfect the flow. Tip: ✂ Isolate part first to work on one piece.</p>`); }
+    if (streamMode === 'wrap') { hint('Tap a fill to make its thread wrap around the shape'); parts.push(`<p class="small" style="margin:0">Quick option for borders and outlines: the thread turns with the shape automatically (no points to place).</p>`); }
+    parts.push('</div>');
+    if (isCol && !draft) {
+      const m = Math.floor(o.points.length / 2);
+      parts.push(`<div class="sec"><h3>${esc(o.name || 'Column')} · ${m} direction lines${o.closed ? ' · loop' : ''}</h3>
+        <div class="btns">${btn('stIns', streamIns ? 'Tap the column…' : '＋ Add direction line', streamIns ? 'primary' : '')}${btn('stDelPair', 'Delete selected pair')}${btn('stRev', '⇄ Reverse direction')}${o.closed ? btn('stOpen', 'Open loop') : btn('stCloseCol', 'Close loop')}</div>
+        <div class="row" style="margin-top:8px"><label>Edges</label><div class="toggle" id="stCurve"><button data-v="1" class="${o.curve !== false ? 'on' : ''}">Smooth curves</button><button data-v="0" class="${o.curve === false ? 'on' : ''}">Straight</button></div></div>`);
+      parts.push(densityPresets(o));
+      parts.push(slider('Density', 'sden', 0.15, 1, 0.01, o.spacing || 0.4, ' mm', (v, f) => { o.spacing = v; draw(); if (f) commit(); }));
+      parts.push(slider('Pull comp', 'spc', 0, 0.5, 0.01, o.pullComp == null ? 0.15 : o.pullComp, ' mm', (v, f) => { o.pullComp = v; draw(); if (f) commit(); }));
+      parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="stUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
+      parts.push(`<p class="small" style="margin:6px 0 0">Drag any blue point to re-aim a direction line. Inner side of tight turns gets short stitches automatically so it doesn't bunch; columns wider than 8 mm get a split stitch so nothing hangs loose.</p></div>`);
+    }
+    mount(parts);
+    $('#stMode').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { streamMode = b2.dataset.v; draft = null; streamIns = false; renderSheet(); draw(); }));
+    on('stDone', finishDraft);
+    on('stClose', () => { if (!draft) return; if (draft.points.length % 2) draft.points.pop(); if (draft.points.length < 6) { toast('A loop needs at least 3 pairs'); return; } draft.closed = true; finishDraft(); });
+    on('stBack', () => { if (draft) { draft.points.pop(); if (!draft.points.length) draft = null; renderSheet(); draw(); } });
+    on('stCancel', () => { draft = null; renderSheet(); draw(); });
+    if (isCol) {
+      on('stIns', () => { streamIns = !streamIns; renderSheet(); if (streamIns) toast('Tap on the column where you want a new direction line'); });
+      on('stDelPair', () => { if (selNode < 0) { toast('Tap a blue point first'); return; } if (o.points.length <= 4) { toast('A column needs at least 2 pairs'); return; } const k = Math.floor(selNode / 2) * 2; o.points.splice(k, 2); selNode = -1; commit(); renderSheet(); draw(); });
+      on('stRev', () => { const pr = []; for (let i = 0; i + 1 < o.points.length; i += 2) pr.push([o.points[i], o.points[i + 1]]); pr.reverse(); o.points = pr.flat(); commit(); renderSheet(); draw(); toast('Column now sews the other way'); });
+      on('stCloseCol', () => { if (o.points.length < 6) { toast('A loop needs at least 3 pairs'); return; } o.closed = true; commit(); renderSheet(); draw(); });
+      on('stOpen', () => { delete o.closed; commit(); renderSheet(); draw(); });
+      const tgl = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); commit(); renderSheet(); draw(); })); };
+      tgl('stCurve', v => o.curve = v === '1' ? undefined : false);
+      tgl('stUnder', v => o.underlay = v === '1');
+      const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { o.spacing = +b2.dataset.v; commit(); renderSheet(); draw(); }));
+    }
   }
 
   // ---------------- stitch brushes
@@ -1323,7 +1531,8 @@
     if (draft && t !== tool) draft = null;
     if (t === 'fill' || t === 'satin' || t === 'run') drawKind = t;
     if (t !== 'select' && t !== 'layers') bgSel = false;
-    tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush' && t !== 'pick') selId = null;
+    if (t !== 'stream') streamIns = false;
+    tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush' && t !== 'pick' && t !== 'stream') selId = null;
     document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t || (b.dataset.tool === 'draw' && t === drawKind)));
     renderSheet(); draw();
   }
@@ -1337,6 +1546,7 @@
     if (tool === 'pick') return renderPickSheet();
     if (tool === 'text') return renderTextSheet(null);
     if (tool === 'auto') return renderAutoSheet();
+    if (tool === 'stream') return renderStreamSheet();
     if (tool === 'layers') return renderLayers();
     const o = sel();
     if (!o && bgSel && doc.bg) { hint('Drag the picture to move it · drag the blue corner to resize'); return renderImageSheet(); }
@@ -1934,7 +2144,7 @@
   window.SS = {
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
-    setTool, renderSheet, draw, drawNow, restitch, isolateAt, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setTool, renderSheet, draw, drawNow, restitch, isolateAt, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },

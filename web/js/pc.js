@@ -127,7 +127,8 @@
     if (k === '}') { run('last'); return; }
     if (k === '?') { keysModal(); return; }
     if (k.startsWith('Arrow')) { const o = selObj(); if (!o) return; e.preventDefault(); const st = e.shiftKey ? 1 : 0.1; SS.translate(o, k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0); SS.draw(); clearTimeout(nudgeT); nudgeT = setTimeout(() => SS.commit(), 500); return; }
-    const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers' };
+    if (k === 'Enter' && SS.hasDraft && SS.hasDraft()) { e.preventDefault(); SS.finishDraft(); return; }
+    const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers', s: 'stream' };
     const t = tools[k.toLowerCase()]; if (t) { document.querySelector(`#tools [data-tool=${t}]`).click(); return; }
     if (k.toLowerCase() === 'r') run('real');
     if (k.toLowerCase() === 'p') run('preview');
