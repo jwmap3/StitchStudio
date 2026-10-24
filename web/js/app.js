@@ -86,9 +86,25 @@
   }
   let lastSnap = snapshot();
   function restore(snap) { const d = JSON.parse(snap); doc.objects = d.objects; doc.nextId = d.nextId; lastSnap = snap; if (!sel()) selId = null; cache.clear(); autosave(); updateUndo(); renderSheet(); draw(); }
-  function undo() { if (!undoStack.length) return; redoStack.push(lastSnap); restore(undoStack.pop()); }
-  function redo() { if (!redoStack.length) return; undoStack.push(lastSnap); restore(redoStack.pop()); }
-  function updateUndo() { $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
+  // while drawing (a column, a fill outline, a line), Undo/Redo step through the points you placed
+  let draftRedo = [];
+  const draftList = () => !draft ? null : draft.type === 'fill' ? draft.loops[draft.loops.length - 1] : draft.points;
+  const draftHas = () => !!draft && (draft.type === 'fill' ? draft.loops.some(l => l.length) : draft.points.length > 0);
+  function undo() {
+    if (draftHas()) {
+      let l = draftList();
+      if (draft.type === 'fill' && !l.length && draft.loops.length > 1) { draft.loops.pop(); l = draftList(); }
+      const q = l.pop(); if (q) draftRedo.push(q);
+      if (!draftHas()) draft = null;
+      renderSheet(); draw(); toast('Point removed'); return;
+    }
+    if (!undoStack.length) return; redoStack.push(lastSnap); restore(undoStack.pop());
+  }
+  function redo() {
+    if (draft && draftRedo.length) { draftList().push(draftRedo.pop()); renderSheet(); draw(); return; }
+    if (!redoStack.length) return; undoStack.push(lastSnap); restore(redoStack.pop());
+  }
+  function updateUndo() { $('#bUndo').disabled = !undoStack.length && !draftHas(); $('#bRedo').disabled = !redoStack.length && !(draft && draftRedo.length); }
   let saveT = 0;
   function autosave() { clearTimeout(saveT); saveT = setTimeout(autosaveNow, 700); }
   function autosaveNow() {
@@ -189,7 +205,7 @@
     navT = setTimeout(() => { navFast = false; draw(); }, 140);
     draw();
   }
-  function draw() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
+  function draw() { updateUndo(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
   function drawFromFrame() {
     const r = cv.getBoundingClientRect(), dpr = cv.width / r.width, f = frame.view, k = view.s / f.s;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -760,6 +776,7 @@
 
   function onTap(p) {
     if (preview) return;
+    draftRedo = [];
     if (isoArm) { isoArm = false; hint(''); isolateAt(sel(), p); return; }
     if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
     if (tool === 'auto' && autoPickSrc) {
