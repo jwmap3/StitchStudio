@@ -75,6 +75,7 @@
       case 'picTop': SS.picTop(true); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
+      case 'restitch': { const o2 = SS.sel(); if (o2 && (o2.type === 'import' || o2.type === 'stitches')) SS.restitch(o2); else SS.toast('Select an imported design first'); break; }
       case 'outline': outlineModal(); break;
       case 'guide': document.querySelector('#menu [data-act=help]').click(); break;
     }
@@ -162,7 +163,7 @@
     ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
-      <button class="it" data-c="center">Center in hoop</button><hr>
+      <button class="it" data-c="center">Center in hoop</button>${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
       <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') : ''}`
       : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;

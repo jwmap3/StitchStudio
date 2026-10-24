@@ -651,7 +651,7 @@
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && hit.id !== selId) { selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
-    if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); } return; }
+    if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); const so = sel(); if (so && (so.type === 'import' || so.type === 'stitches') && Math.abs((so.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); } return; }
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
     if (g.type === 'moveimg') { autosave(); if (window.__imgSheet) renderImageSheet(); return; }
     if (g.type === 'lasso') { const st = stroke; stroke = null; finishLasso(st); return; }
@@ -1012,6 +1012,53 @@
     st.palette = C.map((c, k) => ({ src: c, thread: nearestThread(hex3(c))[0], n: cnt[k] })).filter(e => e.n > 0).sort((a, b2) => b2.n - a.n);
     st.sel = 0;
   }
+  // turn a colour-label map into fill layers (one per thread group, in sew order)
+  function layersFromLabels(L, w, h, b, mmPerPx, groups, grank, opts) {
+    const n = w * h, made = [], outlineLines = [];
+    const ANG = [45, -45, 0, 90, 30, -60, 15, -30];
+    const pcaAngle = loops => { let sx = 0, sy = 0, n2 = 0; loops.forEach(l => l.forEach(q => { sx += q[0]; sy += q[1]; n2++; })); const mx = sx / n2, my = sy / n2; let a = 0, b2 = 0, c = 0; loops.forEach(l => l.forEach(q => { const dx = q[0] - mx, dy = q[1] - my; a += dx * dx; b2 += dx * dy; c += dy * dy; })); return 0.5 * Math.atan2(2 * b2, a - c) * 180 / Math.PI; };
+    const perim = loops => loops.reduce((t, l) => t + l.reduce((u, q, i2) => u + Math.hypot(q[0] - l[(i2 + 1) % l.length][0], q[1] - l[(i2 + 1) % l.length][1]), 0), 0);
+      // chamfer distance transform (half-width of a shape, in px)
+      const dist = M => { const D = new Float32Array(n); for (let i = 0; i < n; i++) D[i] = M[i] ? 1e9 : 0;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x) v = Math.min(v, D[i - 1] + 1); if (y) v = Math.min(v, D[i - w] + 1); if (x && y) v = Math.min(v, D[i - w - 1] + 1.414); if (y && x < w - 1) v = Math.min(v, D[i - w + 1] + 1.414); D[i] = v; }
+        for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x < w - 1) v = Math.min(v, D[i + 1] + 1); if (y < h - 1) v = Math.min(v, D[i + w] + 1); if (x < w - 1 && y < h - 1) v = Math.min(v, D[i + w + 1] + 1.414); if (y < h - 1 && x) v = Math.min(v, D[i + w - 1] + 1.414); D[i] = v; }
+        return D; };
+      groups.forEach((g2, r) => {
+        const M0 = new Uint8Array(n);
+        for (let i = 0; i < n; i++) M0[i] = L[i] >= 0 && grank[L[i]] === r ? 1 : 0;
+        // decide satin vs tatami per separate piece: narrow pieces get satin shine, broad areas tatami
+        const D = dist(M0);
+        const { lab, n: nc } = T.components(M0, w, h, 1);
+        const vals = Array.from({ length: nc + 1 }, () => []);
+        for (let i = 0; i < n; i++) if (lab[i]) vals[lab[i]].push(D[i]);
+        const isSat = new Uint8Array(nc + 1);
+        for (let c = 1; c <= nc; c++) {
+          const v = vals[c]; if (!v.length) continue; v.sort((a, b3) => a - b3);
+          const wide = 2 * v[Math.floor(v.length * 0.99)] * mmPerPx;
+          isSat[c] = opts.style === 'satin' || (opts.style === 'mixed' && wide < 7) ? 1 : 0;
+        }
+        const kinds = opts.style === 'mixed' ? [1, 0] : [opts.style === 'satin' ? 1 : 0];
+        kinds.forEach(satinK => {
+          const M = new Uint8Array(n); let any = false;
+          for (let i = 0; i < n; i++) if (lab[i] && (opts.style !== 'mixed' || isSat[lab[i]] === satinK)) { M[i] = 1; any = true; }
+          if (!any) return;
+          // underlap: tuck under colours sewn later
+          const Dl = T.dilate(M, w, h, 1);
+          for (let i = 0; i < n; i++) if (Dl[i] && !M[i] && L[i] >= 0 && grank[L[i]] > r) M[i] = 1;
+          const loops = T.contours(M, w, h).map(l => T.simplify(l, opts.smooth || 0.7)).filter(l => Math.abs(T.area(l)) * mmPerPx * mmPerPx > 0.3)
+            .map(l => l.map(q => [b.x + q[0] * mmPerPx, b.y + q[1] * mmPerPx]));
+          if (!loops.length) return;
+          const satin = !!satinK;
+          const long = pcaAngle(loops);
+          let angle = opts.dir === 'fixed' ? opts.angle : opts.dir === 'varied' ? ANG[r % ANG.length] : (satin ? long + 90 : long + 45);
+          angle = ((Math.round(angle) + 90) % 180 + 180) % 180 - 90;
+          const dens = opts.density || 0.4;
+          made.push({ type: 'fill', name: g2.nm + (satin ? ' · satin' : ' · tatami'), paths: loops, angle, spacing: satin ? dens : Math.max(dens, 0.3), stitchLen: satin ? 12 : 3.5, underlay: opts.underlay !== false, pullComp: opts.pull == null ? 0.2 : opts.pull, satinLook: satin, color: g2.col, auto: true });
+          if (opts.outline && opts.outline !== 'none') loops.forEach(l => { if (perim([l]) > 6) outlineLines.push(l); });
+        });
+      });
+    return { made, outlineLines };
+  }
   function autoDigitize(opts) {
     if (!bgImg || !doc.bg) { toast('Open an image first (menu → Open image)'); return; }
     busy(true);
@@ -1030,10 +1077,7 @@
         const areas = C.map((_, k) => { let a = 0; for (let i = 0; i < n; i++) if (L[i] === k) a++; return a; });
         const order = C.map((_, k) => k).filter(k => areas[k] > 0).sort((a, b2) => areas[b2] - areas[a]);
         const rank = new Int16Array(C.length); order.forEach((k, r) => rank[k] = r);
-        const ANG = [45, -45, 0, 90, 30, -60, 15, -30];
-        const made = [], outlines = [];
-        const pcaAngle = loops => { let sx = 0, sy = 0, n2 = 0; loops.forEach(l => l.forEach(q => { sx += q[0]; sy += q[1]; n2++; })); const mx = sx / n2, my = sy / n2; let a = 0, b2 = 0, c = 0; loops.forEach(l => l.forEach(q => { const dx = q[0] - mx, dy = q[1] - my; a += dx * dx; b2 += dx * dy; c += dy * dy; })); return 0.5 * Math.atan2(2 * b2, a - c) * 180 / Math.PI; };
-        const perim = loops => loops.reduce((t, l) => t + l.reduce((u, q, i2) => u + Math.hypot(q[0] - l[(i2 + 1) % l.length][0], q[1] - l[(i2 + 1) % l.length][1]), 0), 0);
+        const outlines = [];
         // group colour clusters that land on the same thread
         const colOf = k => '#' + C[k].map(v => v.toString(16).padStart(2, '0')).join('');
         const groups = [];
@@ -1046,33 +1090,7 @@
           g2.ks.push(k);
         });
         const grank = new Int16Array(C.length).fill(-1); groups.forEach((g2, r) => g2.ks.forEach(k => grank[k] = r));
-        // chamfer distance transform (half-width of a shape, in px)
-        const dist = M => { const D = new Float32Array(n); for (let i = 0; i < n; i++) D[i] = M[i] ? 1e9 : 0;
-          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x) v = Math.min(v, D[i - 1] + 1); if (y) v = Math.min(v, D[i - w] + 1); if (x && y) v = Math.min(v, D[i - w - 1] + 1.414); if (y && x < w - 1) v = Math.min(v, D[i - w + 1] + 1.414); D[i] = v; }
-          for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const i = y * w + x; if (!D[i]) continue; let v = D[i]; if (x < w - 1) v = Math.min(v, D[i + 1] + 1); if (y < h - 1) v = Math.min(v, D[i + w] + 1); if (x < w - 1 && y < h - 1) v = Math.min(v, D[i + w + 1] + 1.414); if (y < h - 1 && x) v = Math.min(v, D[i + w - 1] + 1.414); D[i] = v; }
-          return D; };
-        const outlineLines = [];
-        groups.forEach((g2, r) => {
-          let M = new Uint8Array(n);
-          for (let i = 0; i < n; i++) M[i] = L[i] >= 0 && grank[L[i]] === r ? 1 : 0;
-          // how wide are the thick parts? (95th percentile of the half-width over the area)
-          const D = dist(M); const vals = []; for (let i = 0; i < n; i += 3) if (M[i]) vals.push(D[i]);
-          vals.sort((a, b3) => a - b3); const wide = vals.length ? 2 * vals[Math.floor(vals.length * 0.99)] * mmPerPx : 0;
-          // underlap: tuck under colours sewn later
-          const Dl = T.dilate(M, w, h, 1);
-          for (let i = 0; i < n; i++) if (Dl[i] && !M[i] && L[i] >= 0 && grank[L[i]] > r) M[i] = 1;
-          const loops = T.contours(M, w, h).map(l => T.simplify(l, opts.smooth || 0.7)).filter(l => Math.abs(T.area(l)) * mmPerPx * mmPerPx > 0.3)
-            .map(l => l.map(q => [b.x + q[0] * mmPerPx, b.y + q[1] * mmPerPx]));
-          if (!loops.length) return;
-          // satin shine where the parts are narrow enough for clean satin (< 7 mm); tatami for big areas
-          const satin = opts.style === 'satin' || (opts.style === 'mixed' && wide < 7);
-          const long = pcaAngle(loops);
-          let angle = opts.dir === 'fixed' ? opts.angle : opts.dir === 'varied' ? ANG[r % ANG.length] : (satin ? long + 90 : long + 45);
-          angle = ((Math.round(angle) + 90) % 180 + 180) % 180 - 90;
-          const dens = opts.density || 0.4;
-          made.push({ type: 'fill', name: g2.nm + (satin ? ' · satin' : ' · tatami'), paths: loops, angle, spacing: satin ? dens : Math.max(dens, 0.3), stitchLen: satin ? 12 : 3.5, underlay: opts.underlay !== false, pullComp: opts.pull == null ? 0.2 : opts.pull, satinLook: satin, color: g2.col, auto: true });
-          if (opts.outline && opts.outline !== 'none') loops.forEach(l => { if (perim([l]) > 6) outlineLines.push(l); });
-        });
+        const { made, outlineLines } = layersFromLabels(L, w, h, b, mmPerPx, groups, grank, opts);
         if (outlineLines.length) {
           const lines = outlineLines.map(l => {
             const R = S.resamplePolyline(l, 2.0, true);
@@ -1088,6 +1106,85 @@
         made.concat(outlines).forEach(o => { o.id = doc.nextId++; doc.objects.push(o); });
         selId = null; commit(); renderSheet(); toast(`Created ${made.length} thread layers${outlines.length ? ' + outline' : ''} — tap any to fine-tune`);
       } catch (e) { console.error(e); toast('Auto-digitize failed: ' + e.message); }
+      busy(false); draw();
+    }, 30);
+  }
+
+  // Re-stitch an imported design at its current size: rebuild each thread colour as a fresh
+  // fill so density, stitch length and satin widths are correct again after resizing.
+  function restitch(o) {
+    if (!o || (o.type !== 'import' && o.type !== 'stitches')) return;
+    const bb = bbox(o); if (!bb) return;
+    busy(true);
+    setTimeout(() => {
+      try {
+        const blocks = o.type === 'import' ? o.blocks : [{ color: o.color, name: o.name, lines: o.lines }];
+        const k = o.scaleK || 1;
+        const pad = 1.5, bx = bb[0] - pad, by = bb[1] - pad, bw = bb[2] - bb[0] + 2 * pad, bh = bb[3] - bb[1] + 2 * pad;
+        const mmPerPx = Math.max(0.1, Math.max(bw, bh) / 1300);
+        const w = Math.max(8, Math.ceil(bw / mmPerPx)), h = Math.max(8, Math.ceil(bh / mmPerPx)), n = w * h;
+        // one thread group per colour, in the order the colours first sew
+        const groups = [], gOf = [];
+        blocks.forEach((bl, i) => {
+          const col = (bl.color || '#000000').toLowerCase();
+          let gi = groups.findIndex(g => g.col === col);
+          if (gi < 0) { const nm = (bl.name && !bl.name.startsWith('#') && !/^Thread \d+$/.test(bl.name)) ? bl.name : nearestThread(col)[1]; groups.push({ col, nm: nm || 'Thread ' + (groups.length + 1), ks: [groups.length] }); gi = groups.length - 1; }
+          gOf[i] = gi;
+        });
+        // paint every stitch as a thread of its real (scaled) width, one colour block at a time;
+        // an "opening" then wipes out lone strands (travel threads, jumps) so only real stitched
+        // areas remain; later blocks cover earlier ones, just like on the fabric
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        const lw = Math.max(2, 0.45 * k / mmPerPx), r = Math.floor(lw / 2) + 1, e = Math.max(1, Math.round((0.25 * k + 0.1) / mmPerPx));
+        // fast square erode / dilate with running sums (separable)
+        const morph = (M, rad, erode) => {
+          const T1 = new Uint8Array(n), out = new Uint8Array(n), win = 2 * rad + 1;
+          for (let y = 0; y < h; y++) { let sum = 0; const o0 = y * w;
+            for (let x = -rad; x < w + rad; x++) { const add = x + rad, rem = x - rad - 1;
+              if (add < w && add >= 0) sum += M[o0 + add]; else if (erode) sum += 0;
+              if (rem >= 0 && rem < w) sum -= M[o0 + rem];
+              if (x >= 0 && x < w) { const lo = Math.max(0, x - rad), hi = Math.min(w - 1, x + rad), cnt = hi - lo + 1; T1[o0 + x] = erode ? (sum === cnt && cnt === win ? 1 : 0) : (sum > 0 ? 1 : 0); } } }
+          for (let x = 0; x < w; x++) { let sum = 0;
+            for (let y = -rad; y < h + rad; y++) { const add = y + rad, rem = y - rad - 1;
+              if (add < h && add >= 0) sum += T1[add * w + x];
+              if (rem >= 0 && rem < h) sum -= T1[rem * w + x];
+              if (y >= 0 && y < h) { const lo = Math.max(0, y - rad), hi = Math.min(h - 1, y + rad), cnt = hi - lo + 1; out[y * w + x] = erode ? (sum === cnt && cnt === win ? 1 : 0) : (sum > 0 ? 1 : 0); } } }
+          return out;
+        };
+        const MOs = blocks.map(bl => {
+          g.clearRect(0, 0, w, h); g.lineCap = 'butt'; g.lineJoin = 'miter'; g.lineWidth = lw; g.strokeStyle = '#fff';
+          (bl.lines || []).forEach(l => { if (l.length < 2) return; g.beginPath(); l.forEach((q, j) => { const x = (q[0] - bx) / mmPerPx, y = (q[1] - by) / mmPerPx; if (j) g.lineTo(x, y); else g.moveTo(x, y); }); g.stroke(); });
+          const px = g.getImageData(0, 0, w, h).data, M = new Uint8Array(n);
+          for (let j = 0; j < n; j++) M[j] = px[j * 4 + 3] >= 110 ? 1 : 0;
+          return morph(morph(M, r, true), r, false);
+        });
+        // top colour wins. Each colour is pulled back to its true edge (the old stitches reach past
+        // it), except where a later colour covers that edge anyway, so no fabric gaps open up.
+        // Very thin details are kept as they are.
+        let L = new Int16Array(n).fill(-1);
+        const U = new Uint8Array(n);
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const Mo = MOs[i], MU = new Uint8Array(n);
+          for (let j = 0; j < n; j++) MU[j] = Mo[j] | U[j];
+          const E = morph(MU, e, true), O2 = morph(morph(Mo, e, true), e, false);
+          for (let j = 0; j < n; j++) {
+            if (L[j] < 0 && Mo[j] && (E[j] || !O2[j])) L[j] = gOf[i];
+            if (Mo[j]) U[j] = 1;
+          }
+        }
+        L = T.majority(L, w, h, groups.length); L = T.majority(L, w, h, groups.length);
+        L = T.despeckle(L, w, h, groups.length, Math.max(4, Math.round((0.5 / mmPerPx) ** 2)));
+        const grank = new Int16Array(groups.length); groups.forEach((_, r) => grank[r] = r);
+        const opts = { style: 'mixed', density: 0.4, underlay: true, pull: 0.2, smooth: Math.max(0.7, 0.15 / mmPerPx), dir: 'follow', outline: 'none' };
+        const { made } = layersFromLabels(L, w, h, { x: bx, y: by }, mmPerPx, groups, grank, opts);
+        if (!made.length) { toast('Nothing to re-stitch'); busy(false); return; }
+        const at = doc.objects.indexOf(o);
+        made.forEach(m => { m.id = doc.nextId++; m.auto = false; m.name = m.name + ' (from ' + (o.name || 'import') + ')'; });
+        doc.objects.splice(at, 1, ...made);
+        selId = made[0].id; commit(); renderSheet();
+        toast(`Re-stitched at ${inch(bb[2] - bb[0])} × ${inch(bb[3] - bb[1])} in — ${made.length} thread layers with correct density`);
+      } catch (e) { console.error(e); toast('Re-stitch failed: ' + e.message); }
       busy(false); draw();
     }, 30);
   }
@@ -1329,8 +1426,8 @@
       if (fx !== fy) o.paths.forEach(l => l.reverse());
     } else if (o.type === 'satin') o.points.forEach(q => { f(q); q[2] = (q[2] || o.width || 3) * k; });
     else if (o.type === 'run') o.points.forEach(f);
-    else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
-    else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f)));
+    else if (o.type === 'stitches') { o.lines.forEach(l => l.forEach(f)); o.scaleK = (o.scaleK || 1) * k; }
+    else if (o.type === 'import') { o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f))); o.scaleK = (o.scaleK || 1) * k; }
     else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; const kt = Math.abs(kx - 1) > Math.abs(ky - 1) ? kx : ky; o.size *= kt; if (o.bend) o.bend /= kt; if (kx !== ky) o.spacingLetters = (o.spacingLetters || 0) + 0; layoutText(o); }
   }
   function transformPanel(o) {
@@ -1343,10 +1440,11 @@
       <div class="btns" style="margin:4px 0 8px">${btn('xC', '⊕ Center in hoop', 'sm')}${btn('xCh', '↔ Center', 'sm')}${btn('xCv', '↕ Center', 'sm')}</div>
       <div class="btns" style="margin:4px 0 8px">${btn('xS9', '− 10%', 'sm')}${btn('xS11', '+ 10%', 'sm')}${btn('xS50', '½ size', 'sm')}${btn('xS200', '2×', 'sm')}</div>
       ${canTurn ? `<div class="btns" style="margin:0 0 8px">${btn('xRl', '⟲ 15°', 'sm')}${btn('xRr', '⟳ 15°', 'sm')}${btn('xR90', '⟳ 90°', 'sm')}${btn('xFh', '⇋ Flip', 'sm')}${btn('xFv', '⇵ Flip', 'sm')}</div>` : '<p class="small" style="margin:0 0 6px">Text resizes here; use Arch and Spacing to shape it.</p>'}
-      <p class="small" style="margin:0">Or drag the handles on the canvas: corners resize, sides stretch (hold Shift to free the proportions). Drag inside the box to move.${isStitch ? ' Imported stitches keep their stitch count, so resizing more than about 20% makes them denser or looser — re-digitize for big size changes.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
+      ${isStitch ? `<div class="btns" style="margin:0 0 8px">${btn('xRe', '✨ Re-stitch at this size', 'pri')}</div>` : ''}
+      <p class="small" style="margin:0">Or drag the handles on the canvas: corners resize, sides stretch (hold Shift to free the proportions). Drag inside the box to move.${isStitch ? ' Resizing a stitch file just stretches its stitches' + (Math.abs((o.scaleK || 1) - 1) > 0.1 ? ` (now ${Math.round((o.scaleK || 1) * 100)}% of the original — stitches are ${(o.scaleK || 1) > 1 ? 'spread out and long' : 'crammed together'})` : '') + '. Re-stitch at this size rebuilds every colour with fresh, correctly spaced stitches.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
   }
   function bindTransform(o) {
-    const apply = (k, r, fx, fy) => { xform(o, k, r, fx, fy); commit(); renderSheet(); draw(); };
+    const apply = (k, r, fx, fy) => { xform(o, k, r, fx, fy); commit(); renderSheet(); draw(); if ((o.type === 'import' || o.type === 'stitches') && Math.abs((o.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); };
     const setSize = (axis, inches) => { const bb = bbox(o); if (!bb || !(inches > 0)) return; const cur = axis ? bb[3] - bb[1] : bb[2] - bb[0]; if (!(cur > 0)) return; const k = inches * IN / cur;
       apply(doc.linkWH === false && o.type !== 'text' ? (axis ? [1, k] : [k, 1]) : k, 0, false, false); };
     const lk = $('#xLink'); if (lk) lk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.linkWH = b2.dataset.v === '1'; autosave(); renderSheet(); }));
@@ -1354,6 +1452,7 @@
     if (w) { w.addEventListener('change', () => setSize(0, parseFloat(w.value))); h.addEventListener('change', () => setSize(1, parseFloat(h.value))); }
     const ctr = ax => { const bb = bbox(o), h = hoop(); translate(o, ax === 'v' ? 0 : h.w / 2 - (bb[0] + bb[2]) / 2, ax === 'h' ? 0 : h.h / 2 - (bb[1] + bb[3]) / 2); commit(); renderSheet(); draw(); toast('Centered'); };
     on('xC', () => ctr('both')); on('xCh', () => ctr('h')); on('xCv', () => ctr('v'));
+    on('xRe', () => restitch(o));
     on('xS9', () => apply(0.9, 0)); on('xS11', () => apply(1.1, 0)); on('xS50', () => apply(0.5, 0)); on('xS200', () => apply(2, 0));
     on('xRl', () => apply(1, -15)); on('xRr', () => apply(1, 15)); on('xR90', () => apply(1, 90));
     on('xFh', () => apply(1, 0, true, false)); on('xFv', () => apply(1, 0, false, true));
@@ -1783,7 +1882,7 @@
   window.SS = {
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
-    setTool, renderSheet, draw, drawNow, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setTool, renderSheet, draw, drawNow, restitch, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
