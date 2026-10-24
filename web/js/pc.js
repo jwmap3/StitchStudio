@@ -4,6 +4,7 @@
    production worksheet, save-to-folder. */
 (function () {
   'use strict';
+  let ctxPt = null;
   const SS = window.SS; if (!SS) return;
   const $ = s => document.querySelector(s);
   const IN = 25.4, ACTUAL = 96 / 25.4;   // CSS px per mm at 100%
@@ -75,6 +76,8 @@
       case 'picTop': SS.picTop(true); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
+      case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
+      case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'restitch': { const o2 = SS.sel(); if (o2 && (o2.type === 'import' || o2.type === 'stitches')) SS.restitch(o2); else SS.toast('Select an imported design first'); break; }
       case 'outline': outlineModal(); break;
       case 'guide': document.querySelector('#menu [data-act=help]').click(); break;
@@ -158,12 +161,12 @@
   const ctx = document.createElement('div'); ctx.className = 'dd'; document.body.appendChild(ctx);
   SS.cv.addEventListener('contextmenu', e => {
     e.preventDefault(); closeDD();
-    const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p);
+    const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p); ctxPt = p;
     if (o) SS.select(o.id);
     ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
-      <button class="it" data-c="center">Center in hoop</button>${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
+      <button class="it" data-c="center">Center in hoop</button>${(o.type === 'fill' && o.paths.length > 1) || (o.type === 'import' && o.blocks.length > 1) ? `<button class="it" data-c="isolate"><b>✂ Isolate this ${o.type === 'import' ? 'colour' : 'part'}</b></button>` : ''}${o.type === 'fill' ? `<button class="it" data-c="wrap">${o.wrap ? 'Straight thread angle' : '↻ Wrap thread around shape'}</button>` : ''}${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
       <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') : ''}`
       : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;

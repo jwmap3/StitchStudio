@@ -490,6 +490,51 @@
     }
     return null;
   }
+  // ---------------- isolate one piece of a layer into its own layer (e.g. just the "3")
+  let isoArm = false;
+  function isolateAt(o, p) {
+    if (!o) { toast('Select a layer first'); return false; }
+    const at = doc.objects.indexOf(o);
+    if (o.type === 'fill') {
+      const L = o.paths.filter(l => l.length >= 3);
+      const area = l => { let a = 0; for (let i = 0; i < l.length; i++) { const q = l[i], r = l[(i + 1) % l.length]; a += q[0] * r[1] - r[0] * q[1]; } return Math.abs(a / 2); };
+      const inside = (q, l) => S.pointIn(q, [l]);
+      const depth = L.map((l, i) => L.reduce((d, m, j) => d + (j !== i && inside(l[0], m) ? 1 : 0), 0));
+      // the outer outline under the cursor (smallest one that contains the point)
+      let best = -1;
+      L.forEach((l, i) => { if (depth[i] % 2 === 0 && inside(p, l) && (best < 0 || area(l) < area(L[best]))) best = i; });
+      if (best < 0) {   // clicked a hole or just outside: take the nearest outer outline
+        let bd = Infinity; L.forEach((l, i) => { if (depth[i] % 2) return; l.forEach(q => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = i; } }); });
+        if (best < 0 || bd > 6) { toast('Click right on the part you want'); return false; }
+      }
+      const outer = L[best];
+      const part = [outer].concat(L.filter((l, i) => i !== best && depth[i] === depth[best] + 1 && inside(l[0], outer)));
+      if (part.length === L.length) { toast('This layer is already a single piece'); return false; }
+      const rest = L.filter(l => !part.includes(l));
+      const c = JSON.parse(JSON.stringify(o)); delete c.id; delete c.flow; c.auto = false;
+      c.paths = JSON.parse(JSON.stringify(part)); c.name = (o.name || 'Fill').replace(/ \(part.*\)$/, '') + ' (part)';
+      o.paths = rest;
+      c.id = doc.nextId++; doc.objects.splice(at + 1, 0, c);
+      selId = c.id; commit(); renderSheet(); draw();
+      toast('Isolated — this piece is now its own layer. Set its Direction (↻ Wrap or an angle) to taste');
+      return true;
+    }
+    if (o.type === 'import') {
+      if (!o.blocks || o.blocks.length < 2) { toast('This design has only one colour block'); return false; }
+      let bi = -1, bd = Infinity;
+      o.blocks.forEach((bl, i) => bl.lines.forEach(l => l.forEach(q => { const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2; if (d < bd) { bd = d; bi = i; } })));
+      if (bi < 0 || bd > 25) { toast('Click right on the stitches you want'); return false; }
+      const bl = o.blocks[bi];
+      const c = { type: 'import', name: (bl.name && !/^#|^Thread \d+$/.test(bl.name) ? bl.name : threadName(bl.color)) + ' (from ' + (o.name || 'import') + ')', blocks: [JSON.parse(JSON.stringify(bl))], scaleK: o.scaleK };
+      o.blocks.splice(bi, 1);
+      c.id = doc.nextId++; doc.objects.splice(at + 1, 0, c);
+      selId = c.id; commit(); renderSheet(); draw();
+      toast('That colour is now its own layer');
+      return true;
+    }
+    toast(o.type === 'text' ? 'Text is already one layer per word — use separate text layers' : 'This kind of layer is already a single piece');
+    return false;
+  }
   // straighten: every point between point kA and point kB (same outline) moves onto the line A→B, keeping its spacing
   let alignA = null;   // { id, k }
   function alignPick(p) {
@@ -649,6 +694,7 @@
     if (gesture.type === 'pinch') { if (pointers.size === 0) gesture = null; return; }
     const g = gesture; gesture = null;
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
+    if (g.type === 'moveobj' && !g.moved && isoArm) { isoArm = false; hint(''); isolateAt(sel(), g.p); return; }
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && hit.id !== selId) { selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); const so = sel(); if (so && (so.type === 'import' || so.type === 'stitches') && Math.abs((so.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); } return; }
@@ -677,6 +723,7 @@
 
   function onTap(p) {
     if (preview) return;
+    if (isoArm) { isoArm = false; hint(''); isolateAt(sel(), p); return; }
     if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
     if (tool === 'auto' && autoPickSrc) {
       autoPickSrc = false; hint('');
@@ -1053,7 +1100,7 @@
           let angle = opts.dir === 'fixed' ? opts.angle : opts.dir === 'varied' ? ANG[r % ANG.length] : (satin ? long + 90 : long + 45);
           angle = ((Math.round(angle) + 90) % 180 + 180) % 180 - 90;
           const dens = opts.density || 0.4;
-          made.push({ type: 'fill', name: g2.nm + (satin ? ' · satin' : ' · tatami'), paths: loops, angle, spacing: satin ? dens : Math.max(dens, 0.3), stitchLen: satin ? 12 : 3.5, underlay: opts.underlay !== false, pullComp: opts.pull == null ? 0.2 : opts.pull, satinLook: satin, color: g2.col, auto: true });
+          made.push({ type: 'fill', name: g2.nm + (satin ? ' · satin' : ' · tatami'), paths: loops, angle, wrap: satin && opts.dir === 'wrap' ? true : undefined, spacing: satin ? dens : Math.max(dens, 0.3), stitchLen: satin ? 12 : 3.5, underlay: opts.underlay !== false, pullComp: opts.pull == null ? 0.2 : opts.pull, satinLook: satin, color: g2.col, auto: true });
           if (opts.outline && opts.outline !== 'none') loops.forEach(l => { if (perim([l]) > 6) outlineLines.push(l); });
         });
       });
@@ -1498,8 +1545,9 @@
       parts.push(`<div class="swatches" id="impBlk">${o.blocks.map((bl, i) => `<button class="sw ${i === k ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name)}"></button>`).join('')}</div><p class="small" style="margin:6px 0">Thread ${k + 1}: ${esc(o.blocks[k].name)} — pick a new colour:</p>`);
       parts.push(colorPicker(o.blocks[k].color, c => { o.blocks[k].color = c; if (k === 0) o.color = c; commit(); renderSheet(); draw(); }));
       parts.push(transformPanel(o));
-      parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
+      parts.push(`</div><div class="sec"><div class="btns">${o.blocks.length > 1 ? btn('pIso', '✂ Isolate colour') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
       mount(parts); bindTransform(o);
+      on('pIso', () => { isoArm = true; hint('Tap the stitches of the colour to split off'); toast('Now tap the colour you want as its own layer'); });
       $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { renderProps.blk = +b2.dataset.i; renderSheet(); }));
       on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
       on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
@@ -1509,7 +1557,9 @@
     if (o.type === 'stitches') parts.push('<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p>');
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
-      parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
+      parts.push(`<div class="row"><label>Direction</label><div class="toggle" id="tWrap"><button data-v="0" class="${!o.wrap ? 'on' : ''}">Straight angle</button><button data-v="1" class="${o.wrap ? 'on' : ''}">↻ Wrap around</button></div></div>`);
+      if (o.wrap && !o.flow) parts.push(`<p class="small" style="margin:0 0 6px">Thread runs edge to edge and turns with the shape — curves like the bend of a 3 or an S fan around smoothly. Works best on borders, letters and strokes up to about 8 mm wide; for big open areas use Straight angle or Brush → Flow. Tip: right-click (PC) or ✂ Isolate part to give one piece of a layer its own direction.</p>`);
+      if (!o.wrap) parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
       parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tLook"><button data-v="satin" class="${o.satinLook ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${!o.satinLook ? 'on' : ''}">Tatami</button></div></div>`);
       parts.push(densityPresets(o));
       parts.push(slider('Density', 'den', 0.15, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
@@ -1548,18 +1598,20 @@
     if (o.type === 'text') parts.push(borderPanel(o));
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
     parts.push(transformPanel(o));
-    parts.push(`</div><div class="sec"><div class="btns">${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
+    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
     if (o.type === 'text') bindText(o);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
+    tog('tWrap', v => { o.wrap = v === '1'; if (o.wrap) { delete o.flow; if (!o.satinLook) { o.satinLook = true; o.stitchLen = 12; o.pullComp = 0.15; } } });
     tog('tLook', v => { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
     const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { o.spacing = +b2.dataset.v; commit(); renderSheet(); draw(); }));
     const tt = $('#tText'); if (tt) { tt.addEventListener('input', () => { o.text = tt.value; layoutText(o); draw(); }); tt.addEventListener('change', () => commit()); }
     const tf = $('#tFont'); if (tf) tf.addEventListener('change', () => { o.font = +tf.value; layoutText(o); commit(); draw(); });
     on('pClearFlow', () => { delete o.flow; commit(); renderSheet(); draw(); });
+    on('pIso', () => { isoArm = true; hint('Tap the part of this layer to split off'); toast('Now tap the part you want as its own layer'); });
     on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
     on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 3, 3); addObject(c); });
     on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
@@ -1630,7 +1682,7 @@
       tg('aStyle', 'Style', st.style, [['mixed', 'Mixed'], ['satin', 'Satin shine'], ['tatami', 'Tatami']]),
       '<p class="small" style="margin:0 0 4px">Mixed = satin shine on narrow parts and lettering, tatami on big areas (how pros do it).</p>',
       tg('aDen', 'Density', st.density, [[0.4, 'Standard'], [0.32, 'Dense'], [0.25, 'Extra'], [0.18, 'Max']]),
-      tg('aDir', 'Direction', st.dir, [['shape', 'Follow shape'], ['fixed', 'One angle'], ['varied', 'Varied']]));
+      tg('aDir', 'Direction', st.dir, [['shape', 'Follow shape'], ['wrap', '↻ Wrap'], ['fixed', 'One angle'], ['varied', 'Varied']]));
     if (st.dir === 'fixed') parts.push(slider('Angle', 'aAng', -90, 90, 1, st.angle, '°', v => st.angle = v));
     parts.push(tg('aUnder', 'Underlay', st.underlay ? 1 : 0, [[1, 'On'], [0, 'Off']]),
       slider('Pull comp', 'aPull', 0, 0.5, 0.01, st.pull, ' mm', v => st.pull = v),
@@ -1882,7 +1934,7 @@
   window.SS = {
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
-    setTool, renderSheet, draw, drawNow, restitch, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setTool, renderSheet, draw, drawNow, restitch, isolateAt, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },

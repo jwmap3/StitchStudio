@@ -158,7 +158,7 @@
   }
   function flowFill(loops, o) {
     const sp = Math.max(0.2, o.spacing || 0.4), L = Math.max(1, o.stitchLen || 3.5), step = 0.25;
-    const field = flowField(o.flow);
+    const field = o.__field || flowField(o.flow);
     let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
     loops.forEach(l => l.forEach(p => { minx = Math.min(minx, p[0]); miny = Math.min(miny, p[1]); maxx = Math.max(maxx, p[0]); maxy = Math.max(maxy, p[1]); }));
     // occupancy grid for line spacing + inside test cache
@@ -199,7 +199,7 @@
     const lines = [];
     const queue = [];
     // initial seeds: middle of each guide that lies inside, then a grid sweep for leftovers
-    o.flow.forEach(g => { const m = g[Math.floor(g.length / 2)]; if (isIn(m[0], m[1])) queue.push(m.slice()); });
+    (o.flow || []).forEach(g => { const m = g[Math.floor(g.length / 2)]; if (isIn(m[0], m[1])) queue.push(m.slice()); });
     let gridIdx = 0;
     const gridSeeds = [];
     for (let j = 0; j < gh; j += 2) for (let i = 0; i < gw; i += 2) if (inside[j * gw + i]) gridSeeds.push([minx + (i - 1) * cell, miny + (j - 1) * cell]);
@@ -234,6 +234,74 @@
   }
 
   // ---------- object -> stitch "pieces" (continuous point lists) in sewing order
+  // ---------- WRAP: satin that turns with the shape. Thread runs straight across the shape,
+  // edge to edge, everywhere perpendicular to the nearby outline, so curves (a "3", an "S")
+  // get stitches that fan around the bend like hand-digitized lettering.
+  function wrapField(loops) {
+    const smp = [];
+    loops.forEach(l => {
+      if (l.length < 3) return;
+      const R = resamplePolyline(l, 0.7, true);
+      for (let i = 0; i < R.length; i++) {
+        const a = R[(i - 2 + R.length) % R.length], b = R[(i + 2) % R.length];
+        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) + Math.PI / 2;     // across the outline
+        smp.push([R[i][0], R[i][1], Math.cos(2 * ang), Math.sin(2 * ang)]);
+      }
+    });
+    if (!smp.length) return () => [1, 0];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    smp.forEach(q => { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); });
+    // bucket the outline samples so each lookup only visits nearby ones
+    const B = 2.0, bw = Math.ceil((x1 - x0) / B) + 1, bh = Math.ceil((y1 - y0) / B) + 1, bins = new Map();
+    smp.forEach(q => { const k = Math.floor((q[0] - x0) / B) + Math.floor((q[1] - y0) / B) * bw; if (!bins.has(k)) bins.set(k, []); bins.get(k).push(q); });
+    const C = 0.4, gw = Math.ceil((x1 - x0) / C) + 2, gh = Math.ceil((y1 - y0) / C) + 2;
+    const gx = new Float32Array(gw * gh), gy = new Float32Array(gw * gh);
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+      const x = x0 + i * C, y = y0 + j * C, bi = Math.floor((x - x0) / B), bj = Math.floor((y - y0) / B);
+      let cx = 0, sy = 0, dmin = Infinity;
+      for (let R = 0; R < 40; R++) {
+        for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== R) continue;
+          const ii = bi + di, jj = bj + dj; if (ii < 0 || jj < 0 || ii >= bw || jj >= bh) continue;
+          const list = bins.get(ii + jj * bw); if (!list) continue;
+          for (const q of list) { const d2 = (q[0] - x) ** 2 + (q[1] - y) ** 2; dmin = Math.min(dmin, d2); const w = 1 / (d2 * Math.sqrt(d2) + 1e-2); cx += q[2] * w; sy += q[3] * w; }
+        }
+        if (dmin < Infinity && (R - 1) * B > Math.sqrt(dmin) * 2.2 + 2) break;
+      }
+      const m = Math.hypot(cx, sy) || 1; gx[j * gw + i] = cx / m; gy[j * gw + i] = sy / m;
+    }
+    // smooth the direction field so the thread turns gradually instead of kinking at corners
+    for (let it = 0; it < 4; it++) {
+      const ax = new Float32Array(gx), ay = new Float32Array(gy);
+      for (let j = 1; j < gh - 1; j++) for (let i = 1; i < gw - 1; i++) {
+        const k = j * gw + i;
+        let sx = 0, sy2 = 0; for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const kk = k + dj * gw + di; sx += ax[kk]; sy2 += ay[kk]; }
+        const m = Math.hypot(sx, sy2) || 1; gx[k] = sx / m; gy[k] = sy2 / m;
+      }
+    }
+    return (x, y) => {
+      const fx = (x - x0) / C, fy = (y - y0) / C, i = Math.max(0, Math.min(gw - 2, Math.floor(fx))), j = Math.max(0, Math.min(gh - 2, Math.floor(fy)));
+      const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j));
+      const k = j * gw + i;
+      const nx = (gx[k] * (1 - u) + gx[k + 1] * u) * (1 - v) + (gx[k + gw] * (1 - u) + gx[k + gw + 1] * u) * v;
+      const ny = (gy[k] * (1 - u) + gy[k + 1] * u) * (1 - v) + (gy[k + gw] * (1 - u) + gy[k + gw + 1] * u) * v;
+      const a = Math.atan2(ny, nx) / 2;
+      return [Math.cos(a), Math.sin(a)];
+    };
+  }
+  function wrapFill(loops, o) {
+    const pc = o.pullComp == null ? 0.2 : o.pullComp;
+    const rows = flowFill(loops, Object.assign({}, o, { flow: [], __field: wrapField(loops), stitchLen: Math.min(o.stitchLen && o.stitchLen < 7 ? o.stitchLen : 7, 7) }));
+    // pull compensation: push both ends of every stitch row a little past the edge
+    return rows.map(r => {
+      if (r.length < 2 || !pc) return r;
+      // only ends that actually reach the outline get pushed out (rows that stop inside stay put)
+      const ext = (a, b) => { const dx = a[0] - b[0], dy = a[1] - b[1], d = Math.hypot(dx, dy) || 1; if (pointIn([a[0] + dx / d * 0.5, a[1] + dy / d * 0.5], loops)) return a; return [a[0] + dx / d * pc, a[1] + dy / d * pc]; };
+      const out = r.slice(); out[0] = ext(r[0], r[1]); out[out.length - 1] = ext(r[r.length - 1], r[r.length - 2]); return out;
+    });
+  }
+  S.wrapFill = wrapFill;
+
   function fillObject(o) {
     const loops = o.paths || [];
     const pieces = [];
@@ -243,6 +311,11 @@
       let per = 0; for (let i = 0; i < l.length; i++) per += hyp(l[i], l[(i + 1) % l.length]);
       if (per > 2.5) pieces.push({ pts: resamplePolyline(l, 1.5, true), kind: 'underlay' });
     });
+    if (o.wrap && !(o.flow && o.flow.length)) {
+      if (o.underlay !== false && !o.satinLook) tatami(loops, { angle: (o.angle || 0) + 90, spacing: 2.2, stitchLen: 3.0, pullComp: 0, inset: 0.5 }).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'underlay' }); });
+      wrapFill(loops, o).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'top' }); });
+      return orderPieces(pieces);
+    }
     if (o.flow && o.flow.length) {
       if (o.underlay !== false) tatami(loops, { angle: 0, spacing: 2.2, stitchLen: 3.0, pullComp: 0, inset: 0.5 }).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'underlay' }); });
       flowFill(loops, o).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'top' }); });
