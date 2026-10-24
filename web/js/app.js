@@ -1121,7 +1121,7 @@
         const blocks = o.type === 'import' ? o.blocks : [{ color: o.color, name: o.name, lines: o.lines }];
         const k = o.scaleK || 1;
         const pad = 1.5, bx = bb[0] - pad, by = bb[1] - pad, bw = bb[2] - bb[0] + 2 * pad, bh = bb[3] - bb[1] + 2 * pad;
-        const mmPerPx = Math.max(0.1, Math.max(bw, bh) / 1300);
+        const mmPerPx = Math.max(0.06, Math.max(bw, bh) / 1800);
         const w = Math.max(8, Math.ceil(bw / mmPerPx)), h = Math.max(8, Math.ceil(bh / mmPerPx)), n = w * h;
         // one thread group per colour, in the order the colours first sew
         const groups = [], gOf = [];
@@ -1136,7 +1136,7 @@
         // areas remain; later blocks cover earlier ones, just like on the fabric
         const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
         const g = cv.getContext('2d', { willReadFrequently: true });
-        const lw = Math.max(2, 0.45 * k / mmPerPx), r = Math.floor(lw / 2) + 1, e = Math.max(1, Math.round((0.25 * k + 0.1) / mmPerPx));
+        const lw = Math.max(2, 0.45 * k / mmPerPx), r = Math.floor(lw / 2) + 1, e = Math.max(1, Math.round(0.25 * k / mmPerPx));
         // fast square erode / dilate with running sums (separable)
         const morph = (M, rad, erode) => {
           const T1 = new Uint8Array(n), out = new Uint8Array(n), win = 2 * rad + 1;
@@ -1441,7 +1441,7 @@
       <div class="btns" style="margin:4px 0 8px">${btn('xS9', '− 10%', 'sm')}${btn('xS11', '+ 10%', 'sm')}${btn('xS50', '½ size', 'sm')}${btn('xS200', '2×', 'sm')}</div>
       ${canTurn ? `<div class="btns" style="margin:0 0 8px">${btn('xRl', '⟲ 15°', 'sm')}${btn('xRr', '⟳ 15°', 'sm')}${btn('xR90', '⟳ 90°', 'sm')}${btn('xFh', '⇋ Flip', 'sm')}${btn('xFv', '⇵ Flip', 'sm')}</div>` : '<p class="small" style="margin:0 0 6px">Text resizes here; use Arch and Spacing to shape it.</p>'}
       ${isStitch ? `<div class="btns" style="margin:0 0 8px">${btn('xRe', '✨ Re-stitch at this size', 'pri')}</div>` : ''}
-      <p class="small" style="margin:0">Or drag the handles on the canvas: corners resize, sides stretch (hold Shift to free the proportions). Drag inside the box to move.${isStitch ? ' Resizing a stitch file just stretches its stitches' + (Math.abs((o.scaleK || 1) - 1) > 0.1 ? ` (now ${Math.round((o.scaleK || 1) * 100)}% of the original — stitches are ${(o.scaleK || 1) > 1 ? 'spread out and long' : 'crammed together'})` : '') + '. Re-stitch at this size rebuilds every colour with fresh, correctly spaced stitches.' : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
+      <p class="small" style="margin:0">Or drag the handles on the canvas: corners resize, sides stretch (hold Shift to free the proportions). Drag inside the box to move.${isStitch ? ' Resizing a stitch file just stretches its stitches' + (Math.abs((o.scaleK || 1) - 1) > 0.1 ? ` (now ${Math.round((o.scaleK || 1) * 100)}% of the original — stitches are ${(o.scaleK || 1) > 1 ? 'spread out and long' : 'crammed together'})` : '') + '. Re-stitch at this size rebuilds every colour with fresh, correctly spaced stitches.' + ((o.scaleK || 1) < 0.85 ? ' When shrinking a lot, very small lettering can get rough — for the cleanest result, open the original picture and use Auto at the new size.' : '') : ' Stitches are recalculated at the new size, so density stays correct.'}</p>`;
   }
   function bindTransform(o) {
     const apply = (k, r, fx, fy) => { xform(o, k, r, fx, fy); commit(); renderSheet(); draw(); if ((o.type === 'import' || o.type === 'stitches') && Math.abs((o.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); };
