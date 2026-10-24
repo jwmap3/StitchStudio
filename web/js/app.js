@@ -872,7 +872,11 @@
     const o = sel();
     if (streamMode === 'column') {
       if (streamIns && o && o.type === 'satin' && o.mode === 'rails') { streamIns = false; insertDirLine(o, p); return; }
-      if (!draft) { draft = { type: 'satin', points: [], rails: true, stream: true, color: currentColor }; selId = null; }
+      if (!draft) {
+        const h = hitObject(p);
+        if (h && h.type === 'satin' && h.mode === 'rails' && h.id !== selId) { selId = h.id; selNode = -1; renderSheet(); draw(); toast('Column selected — drag points, or 🗑 Delete column'); return; }
+        draft = { type: 'satin', points: [], rails: true, stream: true, color: currentColor }; selId = null;
+      }
       const DP = draft.points, tolF = 14 / view.s;
       if (DP.length >= 4 && DP.length % 2 === 0) {
         const last = DP[DP.length - 1], first = DP[0];
@@ -1018,6 +1022,7 @@
     if (isCol && !draft) {
       const m = Math.floor(o.points.length / 2);
       parts.push(`<div class="sec"><h3>${esc(o.name || 'Column')} · ${m} direction lines${o.closed ? ' · loop' : ''}</h3>
+        <div class="btns" style="margin-bottom:8px">${btn('stDelCol', '🗑 Delete column', 'danger')}${btn('stDesel', 'Done editing')}</div>
         <div class="btns">${btn('stIns', streamIns ? 'Tap the column…' : '＋ Add direction line', streamIns ? 'primary' : '')}${btn('stDelPair', 'Delete selected pair')}${btn('stRev', '⇄ Reverse direction')}${o.closed ? btn('stOpen', 'Open loop') : btn('stCloseCol', 'Close loop')}</div>
         <div class="row" style="margin-top:8px"><label>Edges</label><div class="toggle" id="stCurve"><button data-v="1" class="${o.curve !== false ? 'on' : ''}">Smooth curves</button><button data-v="0" class="${o.curve === false ? 'on' : ''}">Straight</button></div></div>`);
       parts.push(densityPresets(o));
@@ -1033,6 +1038,8 @@
     on('stBack', () => { if (draft) { draft.points.pop(); if (!draft.points.length) draft = null; renderSheet(); draw(); } });
     on('stCancel', () => { draft = null; renderSheet(); draw(); });
     if (isCol) {
+      on('stDelCol', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; selNode = -1; streamIns = false; commit(); renderSheet(); draw(); toast('Column deleted (Undo brings it back)'); });
+      on('stDesel', () => { selId = null; selNode = -1; streamIns = false; renderSheet(); draw(); });
       on('stIns', () => { streamIns = !streamIns; renderSheet(); if (streamIns) toast('Tap on the column where you want a new direction line'); });
       on('stDelPair', () => { if (selNode < 0) { toast('Tap a blue point first'); return; } if (o.points.length <= 4) { toast('A column needs at least 2 pairs'); return; } const k = Math.floor(selNode / 2) * 2; o.points.splice(k, 2); selNode = -1; commit(); renderSheet(); draw(); });
       on('stRev', () => { const pr = []; for (let i = 0; i + 1 < o.points.length; i += 2) pr.push([o.points[i], o.points[i + 1]]); pr.reverse(); o.points = pr.flat(); commit(); renderSheet(); draw(); toast('Column now sews the other way'); });
