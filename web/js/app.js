@@ -75,6 +75,16 @@
     return { fits, fitsRot, machine, w, h: hh };
   }
   const sel = () => doc.objects.find(o => o.id === selId) || null;
+  // Ctrl/Cmd+click: several layers selected at once (e.g. to delete them together)
+  const multi = new Set();
+  function toggleMulti(id) {
+    if (!multi.size && selId != null && selId !== id) multi.add(selId);
+    if (multi.has(id)) { multi.delete(id); if (selId === id) selId = multi.size ? [...multi][multi.size - 1] : null; }
+    else { multi.add(id); selId = id; }
+    if (multi.size === 1) { selId = [...multi][0]; multi.clear(); }
+    bgSel = false; selNode = -1; renderSheet(); draw();
+    if (multi.size > 1) toast(`${multi.size} layers selected — press Delete to remove them`);
+  }
 
   // ---------------- persistence + undo
   const snapshot = () => JSON.stringify({ objects: doc.objects, nextId: doc.nextId });
@@ -310,7 +320,7 @@
     };
     if (!doc.bgOnTop) drawPic();
     if (preview) drawPreview(); else drawDesign();
-    if (doc.bgOnTop) { drawPic(); if (!sceneNoHandles) { const o = sel(); if (o) { drawHandles(o); drawXformHandle(o); } drawBgSel(); } }
+    if (doc.bgOnTop) { drawPic(); if (!sceneNoHandles) { const o = sel(); if (multi.size > 1) drawMulti(); else if (o) { drawHandles(o); drawXformHandle(o); } drawBgSel(); } }
     drawDraft();
   }
 
@@ -337,8 +347,13 @@
     } else drawObjects(list);
     if (sceneNoHandles) return;
     const o = sel();
-    if (o) { drawHandles(o); drawXformHandle(o); }
+    if (multi.size > 1) drawMulti(); else if (o) { drawHandles(o); drawXformHandle(o); }
     drawBgSel();
+  }
+  function drawMulti() {
+    ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.fillStyle = 'rgba(76,194,255,.08)';
+    multi.forEach(id => { const o = doc.objects.find(x => x.id === id); const bb = o && bbox(o); if (!bb) return; const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]); ctx.fillRect(a - 4, b - 4, c - a + 8, d - b + 8); ctx.strokeRect(a - 4, b - 4, c - a + 8, d - b + 8); });
+    ctx.restore();
   }
 
   function shapeNodes(o) {
@@ -665,6 +680,7 @@
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
     if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
+    if (tool === 'select' && !preview && (e.ctrlKey || e.metaKey)) { const h = hitObject(p); gesture = null; if (h) toggleMulti(h.id); return; }
     if (tool === 'select' && !preview && sel()) {
       const o = sel(), bb = bbox(o);
       if (bb) {
@@ -765,7 +781,7 @@
     const g = gesture; gesture = null;
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
     if (g.type === 'moveobj' && !g.moved && isoArm) { isoArm = false; hint(''); isolateAt(sel(), g.p); return; }
-    if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && hit.id !== selId) { selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
+    if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && (hit.id !== selId || multi.size)) { multi.clear(); selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); const so = sel(); if (so && (so.type === 'import' || so.type === 'stitches') && Math.abs((so.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); } return; }
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
@@ -2194,7 +2210,8 @@
   // public interface used by the desktop edition (pc.js)
   window.SS = {
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
-    select(id) { selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
+    select(id) { multi.clear(); selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
+    toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
     setTool, renderSheet, draw, drawNow, restitch, isolateAt, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },

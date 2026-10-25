@@ -47,7 +47,7 @@
       case 'copy': if (!o) { SS.toast('Select a layer first'); break; } if (o) { clip = JSON.stringify(o); SS.toast('Copied ' + (o.name || TYPE[o.type])); } break;
       case 'paste': if (clip) { const c = JSON.parse(clip); delete c.id; SS.translate(c, 4, 4); SS.addObject(c); clip = JSON.stringify(c); } break;
       case 'dup': if (o) { const c = JSON.parse(JSON.stringify(o)); delete c.id; SS.translate(c, 4, 4); SS.addObject(c); } break;
-      case 'del': if (o) { d.objects = d.objects.filter(x => x !== o); SS.select(null); SS.commit(); } break;
+      case 'del': { const ids = SS.multiIds(); if (ids.length > 1) { d.objects = d.objects.filter(x => !ids.includes(x.id)); SS.select(null); SS.commit(); SS.toast(`Deleted ${ids.length} layers (Ctrl+Z brings them back)`); } else if (o) { d.objects = d.objects.filter(x => x !== o); SS.select(null); SS.commit(); } break; }
       case 'earlier': if (o) SS.move(o, -1); break;
       case 'later': if (o) SS.move(o, 1); break;
       case 'first': if (o) { moveTo(o, 0); SS.toast('At the bottom — sews first'); } break;
@@ -163,6 +163,13 @@
   SS.cv.addEventListener('contextmenu', e => {
     e.preventDefault(); closeDD();
     const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p); ctxPt = p;
+    const mids0 = SS.multiIds();
+    if (mids0.length > 1 && o && mids0.includes(o.id)) {
+      ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
+      ctx.style.left = Math.min(e.clientX, innerWidth - 240) + 'px'; ctx.style.top = Math.min(e.clientY, innerHeight - 120) + 'px'; ctx.classList.add('open');
+      ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
+      return;
+    }
     if (o) SS.select(o.id);
     ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
@@ -228,14 +235,14 @@
   // ---------------- layers panel (always visible), drag to reorder
   let layerSig = '', dragFrom = null;
   function renderLayers() {
-    const d = SS.doc(), sid = SS.selId();
-    const sig = JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
+    const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds();
+    const sig = mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
     if (sig === layerSig) return; layerSig = sig;
     const box = $('#pcLayers');
     if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
     box.innerHTML = d.objects.map((o, i) => {
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
-      return `<div class="lr ${o.id === sid ? 'on' : ''} ${o.hidden ? 'hid' : ''}" draggable="true" data-id="${o.id}">
+      return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden ? 'hid' : ''}" draggable="true" data-id="${o.id}">
         <span class="num">${i + 1}</span><span class="dot" style="background:${dot}"></span>
         <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
@@ -251,7 +258,7 @@
     }
     box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
-      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.select(o.id); });
+      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });
       el.addEventListener('dragstart', e => { dragFrom = o; e.dataTransfer.effectAllowed = 'move'; });
       el.addEventListener('dragover', e => { if (dragFrom) { e.preventDefault(); el.classList.add('dragover'); } });
