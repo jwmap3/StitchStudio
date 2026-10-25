@@ -302,6 +302,68 @@
   }
   S.wrapFill = wrapFill;
 
+  // ---------- SAND STITCH: a grainy, hand-sketched texture. Short running stitches wander in
+  // random directions over evenly scattered points, giving light coverage that lets the fabric
+  // show through. Fade makes it thin out across the shape for soft shading.
+  function sandFill(loops, o) {
+    const sp = Math.max(0.35, o.sandSpacing || 0.9), maxStep = Math.max(sp * 1.6, o.sandLen || 2.2);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    loops.forEach(l => l.forEach(q => { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }));
+    if (!(x1 > x0)) return [];
+    // repeatable randomness (same shape -> same stitches every time)
+    let seed = 0; loops.forEach(l => l.forEach(q => { seed = (seed * 31 + Math.round(q[0] * 10) * 7 + Math.round(q[1] * 10)) | 0; }));
+    let st = (seed ^ 0x9e3779b9) >>> 0 || 1;
+    const rnd = () => { st ^= st << 13; st >>>= 0; st ^= st >>> 17; st ^= st << 5; st >>>= 0; return st / 4294967296; };
+    // fade: spacing grows across the shape in the chosen direction
+    const fade = o.sandFade || 0, fa = (o.sandFadeAngle || 0) * Math.PI / 180, fx = Math.cos(fa), fy = Math.sin(fa);
+    const corners = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]].map(c => c[0] * fx + c[1] * fy), pmin = Math.min(...corners), pmax = Math.max(...corners);
+    const rAt = (x, y) => fade ? sp * (1 + fade * 3 * Math.max(0, Math.min(1, ((x * fx + y * fy) - pmin) / ((pmax - pmin) || 1)))) : sp;
+    // scatter points (dart throwing on a grid) with a gap of about the spacing
+    const C = sp / 1.5, gw = Math.ceil((x1 - x0) / C) + 1, gh = Math.ceil((y1 - y0) / C) + 1, grid = new Map(), pts = [];
+    const key = (i, j) => i + j * gw;
+    const tries = Math.min(400000, Math.ceil((x1 - x0) * (y1 - y0) / (sp * sp) * 6));
+    for (let t = 0; t < tries; t++) {
+      const x = x0 + rnd() * (x1 - x0), y = y0 + rnd() * (y1 - y0);
+      if (!pointIn([x, y], loops)) continue;
+      const r = rAt(x, y), gi = Math.floor((x - x0) / C), gj = Math.floor((y - y0) / C), R = Math.ceil(r / C);
+      let ok = true;
+      for (let dj = -R; dj <= R && ok; dj++) for (let di = -R; di <= R && ok; di++) { const list = grid.get(key(gi + di, gj + dj)); if (list) for (const k of list) { const q = pts[k]; if ((q[0] - x) ** 2 + (q[1] - y) ** 2 < r * r) { ok = false; break; } } }
+      if (!ok) continue;
+      const k = pts.length; pts.push([x, y]); const kk = key(gi, gj); if (!grid.has(kk)) grid.set(kk, []); grid.get(kk).push(k);
+    }
+    if (!pts.length) return [];
+    // walk: hop to a random nearby unvisited point (not always the nearest -> grainy, crossing look)
+    const used = new Uint8Array(pts.length), runs = [];
+    const order = pts.map((_, i) => i).sort((a, b) => (pts[a][1] - pts[b][1]) || (pts[a][0] - pts[b][0]));
+    let oi = 0;
+    const inside = (a, b) => pointIn([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], loops);
+    while (true) {
+      while (oi < order.length && used[order[oi]]) oi++;
+      if (oi >= order.length) break;
+      let cur = order[oi]; used[cur] = 1; const run = [pts[cur]];
+      for (;;) {
+        const p = pts[cur], gi = Math.floor((p[0] - x0) / C), gj = Math.floor((p[1] - y0) / C), R = Math.ceil(maxStep / C);
+        const cand = [];
+        for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) { const list = grid.get(key(gi + di, gj + dj)); if (list) for (const k of list) { if (used[k]) continue; const q = pts[k], d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d <= maxStep && d > 0.2) cand.push([k, d]); } }
+        if (!cand.length) {
+          // dead end: reach a little further rather than leaving a loose travel thread
+          const R2 = Math.ceil(maxStep * 1.8 / C); let bk = -1, bd = Infinity;
+          for (let dj = -R2; dj <= R2; dj++) for (let di = -R2; di <= R2; di++) { const list = grid.get(key(gi + di, gj + dj)); if (list) for (const k of list) { if (used[k]) continue; const q = pts[k], d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd && d <= maxStep * 1.8) { bd = d; bk = k; } } }
+          if (bk >= 0 && inside(p, pts[bk])) { used[bk] = 1; run.push(pts[bk]); cur = bk; continue; }
+          break;
+        }
+        cand.sort((a, b) => a[1] - b[1]);
+        let pickK = -1;
+        for (let n = 0; n < 4 && pickK < 0; n++) { const c = cand[Math.min(cand.length - 1, Math.floor(rnd() * Math.min(4, cand.length)))]; if (inside(p, pts[c[0]])) pickK = c[0]; else cand.splice(cand.indexOf(c), 1); if (!cand.length) break; }
+        if (pickK < 0) break;
+        used[pickK] = 1; run.push(pts[pickK]); cur = pickK;
+      }
+      if (run.length > 1) runs.push(run);
+    }
+    return runs;
+  }
+  S.sandFill = sandFill;
+
   function fillObject(o) {
     const loops = o.paths || [];
     const pieces = [];
@@ -311,6 +373,10 @@
       let per = 0; for (let i = 0; i < l.length; i++) per += hyp(l[i], l[(i + 1) % l.length]);
       if (per > 2.5) pieces.push({ pts: resamplePolyline(l, 1.5, true), kind: 'underlay' });
     });
+    if (o.sand) {
+      sandFill(loops, o).forEach(r => pieces.push({ pts: r, kind: 'top' }));
+      return orderPieces(pieces);
+    }
     if (o.wrap && !(o.flow && o.flow.length)) {
       if (o.underlay !== false && !o.satinLook) tatami(loops, { angle: (o.angle || 0) + 90, spacing: 2.2, stitchLen: 3.0, pullComp: 0, inset: 0.5 }).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'underlay' }); });
       wrapFill(loops, o).forEach(r => { if (r.length > 1) pieces.push({ pts: r, kind: 'top' }); });
@@ -698,7 +764,7 @@
           if (d > hopMax) {
             // travel with a running stitch only where it will be buried; otherwise trim so no
             // stray thread is left lying across the fabric or across other colours
-            if (d < 40 && hidden(pos, first)) { const n = Math.ceil(d / (d < 12 ? 2.0 : 3.0)); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
+            if (d < (o.sand ? 3 : 40) && hidden(pos, first)) { const n = Math.ceil(d / (d < 12 ? 2.0 : 3.0)); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
             else trim();
           }
         }

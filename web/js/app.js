@@ -1846,17 +1846,26 @@
     if (o.type === 'stitches') parts.push('<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p>');
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
-      parts.push(`<div class="row"><label>Direction</label><div class="toggle" id="tWrap"><button data-v="0" class="${!o.wrap ? 'on' : ''}">Straight angle</button><button data-v="1" class="${o.wrap ? 'on' : ''}">↻ Wrap around</button></div></div>`);
-      if (o.wrap && !o.flow) parts.push(`<p class="small" style="margin:0 0 6px">Thread runs edge to edge and turns with the shape — curves like the bend of a 3 or an S fan around smoothly. Works best on borders, letters and strokes up to about 8 mm wide; for big open areas use Straight angle or Brush → Flow. Tip: right-click (PC) or ✂ Isolate part to give one piece of a layer its own direction.</p>`);
-      if (!o.wrap) parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
-      parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tLook"><button data-v="satin" class="${o.satinLook ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${!o.satinLook ? 'on' : ''}">Tatami</button></div></div>`);
-      parts.push(densityPresets(o));
-      parts.push(slider('Density', 'den', 0.15, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
-      parts.push(slider('Stitch length', 'sl', 1.5, 7, 0.1, o.stitchLen || 3.5, ' mm', (v, f) => set('stitchLen', v, f)));
-      parts.push(slider('Pull comp', 'pc', 0, 0.6, 0.01, o.pullComp == null ? 0.2 : o.pullComp, ' mm', (v, f) => set('pullComp', v, f)));
+      if (!o.sand) parts.push(`<div class="row"><label>Direction</label><div class="toggle" id="tWrap"><button data-v="0" class="${!o.wrap ? 'on' : ''}">Straight angle</button><button data-v="1" class="${o.wrap ? 'on' : ''}">↻ Wrap around</button></div></div>`);
+      if (o.wrap && !o.flow && !o.sand) parts.push(`<p class="small" style="margin:0 0 6px">Thread runs edge to edge and turns with the shape — curves like the bend of a 3 or an S fan around smoothly. Works best on borders, letters and strokes up to about 8 mm wide; for big open areas use Straight angle or Brush → Flow. Tip: right-click (PC) or ✂ Isolate part to give one piece of a layer its own direction.</p>`);
+      if (!o.wrap && !o.sand) parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle || 0, '°', (v, f) => set('angle', v, f)));
+      parts.push(`<div class="row"><label>Style</label><div class="toggle" id="tLook"><button data-v="satin" class="${o.satinLook && !o.sand ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${!o.satinLook && !o.sand ? 'on' : ''}">Tatami</button><button data-v="sand" class="${o.sand ? 'on' : ''}">Sand</button></div></div>`);
+      if (o.sand) {
+        parts.push(`<p class="small" style="margin:0 0 6px">Sand stitch: short stitches wander in random directions for a grainy, sketched texture that lets the fabric show through. Great for backgrounds, shadows, smoke, skin tone and vintage looks.</p>`);
+        parts.push(slider('Grain spacing', 'sgs', 0.4, 2.5, 0.05, o.sandSpacing || 0.9, ' mm', (v, f) => set('sandSpacing', v, f)));
+        parts.push(slider('Stitch length', 'sgl', 1, 4, 0.1, o.sandLen || 2.2, ' mm', (v, f) => set('sandLen', v, f)));
+        parts.push(slider('Fade', 'sgf', 0, 1, 0.05, o.sandFade || 0, '', (v, f) => set('sandFade', v, f)));
+        if (o.sandFade) parts.push(`<div class="row"><label>Fades toward</label><div class="toggle" id="tSandDir">${[[0, '→'], [90, '↓'], [180, '←'], [270, '↑']].map(([a, l]) => `<button data-v="${a}" class="${(o.sandFadeAngle || 0) === a ? 'on' : ''}">${l}</button>`).join('')}</div></div>`);
+      }
+      if (!o.sand) {
+        parts.push(densityPresets(o));
+        parts.push(slider('Density', 'den', 0.15, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
+        parts.push(slider('Stitch length', 'sl', 1.5, 7, 0.1, o.stitchLen || 3.5, ' mm', (v, f) => set('stitchLen', v, f)));
+        parts.push(slider('Pull comp', 'pc', 0, 0.6, 0.01, o.pullComp == null ? 0.2 : o.pullComp, ' mm', (v, f) => set('pullComp', v, f)));
+      }
     }
     if (o.type === 'fill' && o.flow) parts.push(`<p class="small" style="margin:4px 0">Stitches follow ${o.flow.length} flow line${o.flow.length > 1 ? 's' : ''} (angle is ignored). <button class="btn sm" id="pClearFlow">Clear flow</button></p>`);
-    if (o.type === 'fill') parts.push(`<p class="small" style="margin:4px 0">Tip: use <b>Brush → Flow</b> to curve the stitch direction.</p>`);
+    if (o.type === 'fill' && !o.sand) parts.push(`<p class="small" style="margin:4px 0">Tip: use <b>Brush → Flow</b> to curve the stitch direction.</p>`);
     if (o.type === 'satin' && o.mode !== 'rails') {
       const k = selNode >= 0 && selNode < o.points.length ? selNode : -1;
       const w0 = k >= 0 ? o.points[k][2] : o.points.reduce((a, p) => a + p[2], 0) / o.points.length;
@@ -1895,7 +1904,8 @@
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
     tog('tWrap', v => { o.wrap = v === '1'; if (o.wrap) { delete o.flow; if (!o.satinLook) { o.satinLook = true; o.stitchLen = 12; o.pullComp = 0.15; } } });
-    tog('tLook', v => { o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
+    tog('tLook', v => { if (v === 'sand') { o.sand = true; o.wrap = false; delete o.flow; return; } o.sand = false; o.satinLook = v === 'satin'; o.stitchLen = o.satinLook ? 12 : 3.5; o.pullComp = o.satinLook ? 0.15 : 0.2; });
+    tog('tSandDir', v => { o.sandFadeAngle = +v; });
     const dp = $('#dPre'); if (dp) dp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { o.spacing = +b2.dataset.v; commit(); renderSheet(); draw(); }));
     const tt = $('#tText'); if (tt) { tt.addEventListener('input', () => { o.text = tt.value; layoutText(o); draw(); }); tt.addEventListener('change', () => commit()); }
     const tf = $('#tFont'); if (tf) tf.addEventListener('change', () => { o.font = +tf.value; layoutText(o); commit(); draw(); });
