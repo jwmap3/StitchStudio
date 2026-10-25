@@ -78,6 +78,7 @@
       case 'patch': patchModal(); break;
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
+      case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
       case 'restitch': { const o2 = SS.sel(); if (o2 && (o2.type === 'import' || o2.type === 'stitches')) SS.restitch(o2); else SS.toast('Select an imported design first'); break; }
       case 'outline': outlineModal(); break;
       case 'guide': document.querySelector('#menu [data-act=help]').click(); break;
@@ -165,7 +166,7 @@
     const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p); ctxPt = p;
     const mids0 = SS.multiIds();
     if (mids0.length > 1 && o && mids0.includes(o.id)) {
-      ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
+      ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="borderSel">Satin border around these</button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
       ctx.style.left = Math.min(e.clientX, innerWidth - 240) + 'px'; ctx.style.top = Math.min(e.clientY, innerHeight - 120) + 'px'; ctx.classList.add('open');
       ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
       return;

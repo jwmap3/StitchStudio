@@ -576,11 +576,53 @@
     return null;
   }
   // ---------------- satin border around a fill's edge (like the edge of a Star of Life patch)
-  let borderW = 2.5, borderCol = null;
+  let borderW = 2.5, borderCol = null, borderTarget = 'layer';
   function addSatinBorder(o, width, color) {
     if (!o || o.type !== 'fill') return;
+    borderFromLoops(o.paths, width, color || o.color, (o.name || 'Fill').replace(/ · (satin|tatami|streamline).*$/, ''), o);
+  }
+  // outline of several layers together (holes kept): stitched area -> clean loops
+  function silhouetteLoops(objs) {
+    const PX = 8, GROW = 0.8, list = expand(objs).filter(o => !o.hidden);
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    const P = list.map(o => pieces(o));
+    P.forEach(ps => ps.forEach(pc => pc.pts.forEach(q => { a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[0]); d = Math.max(d, q[1]); })));
+    if (a === Infinity) return [];
+    a -= 4; b -= 4; c += 4; d += 4;
+    const w = Math.ceil((c - a) * PX), h = Math.ceil((d - b) * PX);
+    if (w * h > 2.5e7) return [];
+    const cv2 = document.createElement('canvas'); cv2.width = w; cv2.height = h; const g = cv2.getContext('2d');
+    const X = q => [(q[0] - a) * PX, (q[1] - b) * PX];
+    g.lineCap = g.lineJoin = 'round'; g.strokeStyle = '#000'; g.fillStyle = '#000';
+    // fills: their real outline; everything else: the stitches themselves
+    list.forEach((o, i) => {
+      if (o.type === 'fill' && o.paths) { g.beginPath(); o.paths.forEach(l => { l.forEach((q, k) => { const [x, y] = X(q); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); }); g.fill('evenodd'); }
+      else { g.lineWidth = 0.5 * PX; P[i].forEach(pc => { g.beginPath(); pc.pts.forEach((q, k) => { const [x, y] = X(q); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }); }
+    });
+    // grow everything a little so pieces that almost touch merge into one shape
+    g.lineWidth = 2 * GROW * PX;
+    list.forEach((o, i) => { if (!(o.type === 'fill' && o.paths)) P[i].forEach(pc => { g.beginPath(); pc.pts.forEach((q, k) => { const [x, y] = X(q); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }); });
+    list.forEach(o => { if (o.type === 'fill' && o.paths) { g.beginPath(); o.paths.forEach(l => { l.forEach((q, k) => { const [x, y] = X(q); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); }); g.stroke(); } });
+    const dd = g.getImageData(0, 0, w, h).data, M = new Uint8Array(w * h);
+    for (let k = 0; k < w * h; k++) M[k] = dd[k * 4 + 3] > 100 ? 1 : 0;
+    const all = T.contours(M, w, h).filter(l => Math.abs(T.area(l)) > 6 * PX * PX);
+    if (!all.length) return { loops: [], grow: GROW };
+    // keep the outside edges, plus only real holes (big openings), not little gaps
+    const big = all.reduce((m, l) => Math.abs(T.area(l)) > Math.abs(T.area(m)) ? l : m, all[0]), sg = Math.sign(T.area(big));
+    const keep = all.filter(l => Math.sign(T.area(l)) === sg ? Math.abs(T.area(l)) > 20 * PX * PX : Math.abs(T.area(l)) > 30 * PX * PX);   // skip specks and little gaps
+    return { loops: keep.map(l => T.simplify(l, 0.8).map(q => [a + q[0] / PX, b + q[1] / PX])), grow: GROW };
+  }
+  function addBorderAround(objs, width, color) {
+    if (!objs.length) { toast('Nothing to border'); return; }
+    const SL = silhouetteLoops(objs), L = SL.loops || [];
+    if (!L.length) { toast('Nothing to border'); return; }
+    const last = objs.reduce((m, o) => doc.objects.indexOf(o) > doc.objects.indexOf(m) ? o : m, objs[0]);
+    borderFromLoops(L, width, color, objs.length === doc.objects.filter(o => !o.hidden).length ? 'Design' : 'Shape', last, SL.grow);
+  }
+  function borderFromLoops(paths, width, color, baseName, afterObj, inset) {
+    inset = inset || 0;
     const made = [];
-    o.paths.forEach(l0 => {
+    paths.forEach(l0 => {
       if (l0.length < 3) return;
       // tidy the outline: drop tiny wiggles but keep real corners
       let l = T.simplify(l0.map(q => [q[0], q[1]]), 0.12);
@@ -597,19 +639,20 @@
       // test the direction at the longest edge's midpoint
       let k = 0, best = 0; for (let i = 0; i < n; i++) { const d = Math.hypot(l[(i + 1) % n][0] - l[i][0], l[(i + 1) % n][1] - l[i][1]); if (d > best) { best = d; k = i; } }
       const a = l[k], b = l[(k + 1) % n], mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, ex = a[1] - b[1], ey = b[0] - a[0], eL = Math.hypot(ex, ey) || 1;
-      const outSign = S.pointIn([mx + ex / eL * 0.3, my + ey / eL * 0.3], o.paths) ? -1 : 1;
+      const outSign = S.pointIn([mx + ex / eL * 0.3, my + ey / eL * 0.3], paths) ? -1 : 1;
       const pts = [];
       for (let i = 0; i < n; i++) {
         const m = nrm(i), q = l[i];
-        pts.push([q[0] + m[0] * half * outSign, q[1] + m[1] * half * outSign, width], [q[0] - m[0] * half * outSign, q[1] - m[1] * half * outSign, width]);
+        const c0 = [q[0] - m[0] * inset * outSign, q[1] - m[1] * inset * outSign];   // back onto the true edge
+        pts.push([c0[0] + m[0] * half * outSign, c0[1] + m[1] * half * outSign, width], [c0[0] - m[0] * half * outSign, c0[1] - m[1] * half * outSign, width]);
       }
-      made.push({ type: 'satin', mode: 'rails', closed: true, curve: false, name: (o.name || 'Fill').replace(/ · (satin|tatami|streamline).*$/, '') + ' · border', points: pts, spacing: 0.36, underlay: true, pullComp: 0.15, color: color || o.color });
+      made.push({ type: 'satin', mode: 'rails', closed: true, curve: false, name: baseName + ' · border', points: pts, spacing: 0.36, underlay: true, pullComp: 0.15, color });
     });
     if (!made.length) { toast('Nothing to border'); return; }
-    const at = doc.objects.indexOf(o);
+    const at = doc.objects.indexOf(afterObj);
     made.forEach((m, i) => { m.id = doc.nextId++; doc.objects.splice(at + 1 + i, 0, m); });
     selId = made[0].id; selNode = -1; commit(); renderSheet(); draw();
-    toast(`Satin border added (${width} mm) — it sews right after the fill. Tap it in Stream to drag points.`);
+    toast(`Satin border added (${width} mm${made.length > 1 ? ', ' + made.length + ' outlines' : ''}) — it sews right after. Tap it in Stream to drag points.`);
   }
   // ---------------- isolate one piece of a layer into its own layer (e.g. just the "3")
   let isoArm = false;
@@ -1905,6 +1948,8 @@
     if (o.type === 'fill') {
       const bc = borderCol || o.color;
       parts.push(`</div><div class="sec"><h3>Edge border</h3><p class="small" style="margin:0 0 6px">A smooth satin band around the edge of this shape, like the rim on a Star of Life patch.</p>
+        <div class="row"><label>Around</label><div class="toggle" id="bdT">${[['layer', 'This layer'], ['sel', multi.size > 1 ? `Selected (${multi.size})` : 'Selected'], ['all', 'Whole design']].map(([v, l]) => `<button data-v="${v}" class="${borderTarget === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <p class="small" style="margin:0 0 6px">${borderTarget === 'layer' ? 'Follows this layer’s own edges.' : borderTarget === 'sel' ? 'One border around the outside of all the layers you Ctrl+clicked, as one shape.' : 'One border around the outside of everything, as one shape.'}</p>
         <div class="row"><label>Width</label><div class="toggle" id="bdW">${[[1.5, 'Thin'], [2.5, 'Medium'], [3.5, 'Wide']].map(([v, l]) => `<button data-v="${v}" class="${borderW === v ? 'on' : ''}">${l} ${v}</button>`).join('')}</div></div>
         <div class="row"><label>Colour</label><div class="swatches" id="bdC" style="flex:1">${[o.color, '#000000', '#ffffff', '#c8102e', '#0b2a6b', '#d49b2a', '#9e9e9e', '#1b5e20'].map(c => `<button class="sw ${c === bc ? 'on' : ''}" data-c="${c}" style="background:${c};width:28px;height:28px" title="${threadName(c)}"></button>`).join('')}</div></div>
         <div class="btns" style="margin-top:6px">${btn('bdAdd', '＋ Add satin border', 'primary')}</div>`);
@@ -1956,7 +2001,13 @@
     on('pIso', () => { isoArm = true; hint('Tap the part of this layer to split off'); toast('Now tap the part you want as its own layer'); });
     const bdw = $('#bdW'); if (bdw) bdw.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { borderW = +b2.dataset.v; renderSheet(); }));
     const bdc = $('#bdC'); if (bdc) bdc.querySelectorAll('[data-c]').forEach(b2 => b2.addEventListener('click', () => { borderCol = b2.dataset.c; renderSheet(); }));
-    on('bdAdd', () => addSatinBorder(o, borderW, borderCol || o.color));
+    const bdt = $('#bdT'); if (bdt) bdt.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { borderTarget = b2.dataset.v; renderSheet(); }));
+    on('bdAdd', () => {
+      const col = borderCol || o.color;
+      if (borderTarget === 'layer') { addSatinBorder(o, borderW, col); return; }
+      const objs = borderTarget === 'all' ? doc.objects.filter(x => !x.hidden) : (multi.size > 1 ? doc.objects.filter(x => multi.has(x.id)) : [o]);
+      busy(true); setTimeout(() => { try { addBorderAround(objs, borderW, col); } finally { busy(false); } }, 30);
+    });
     on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
     on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 3, 3); addObject(c); });
     on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
@@ -2283,7 +2334,7 @@
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { multi.clear(); selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
-    setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
