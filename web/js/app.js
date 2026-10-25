@@ -1547,8 +1547,20 @@
     const fi = fitInfo(d);
     if (fi && !fi.machine && !confirm('This design is bigger than the Topaz 30 can stitch (14.17 × 7.87 in). Export anyway?')) return;
     if (fi && fi.machine && !fi.fits && !fi.fitsRot) toast('Heads up: the design is bigger than the ' + hoopDef().name + ' hoop');
-    const bytes = kind === 'vp3' ? S.writeVP3(d) : S.writeDST(d, doc.name);
+    // The Topaz holds long hoops (Royal, Crown…) with the long side running front-to-back, so a
+    // wide design has to go in sideways: turn it 90° so the top of the design points LEFT.
+    let out = d, turned = false;
+    const hd = hoopDef(), longS = Math.max(hd.w, hd.h), shortS = Math.min(hd.w, hd.h);
+    const bw = d.bounds[2] - d.bounds[0], bh = d.bounds[3] - d.bounds[1];
+    if (doc.machineTurn !== 'off' && longS > shortS + 1 && bw > bh && bw > shortS + 0.5 && bh <= shortS + 0.5) {
+      const cx = (d.bounds[0] + d.bounds[2]) / 2, cy = (d.bounds[1] + d.bounds[3]) / 2;
+      const st = d.stitches.map(q => ({ x: cx + (q.y - cy), y: cy - (q.x - cx), c: q.c }));
+      let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; st.forEach(q => { if (q.c === 0) { a = Math.min(a, q.x); b = Math.min(b, q.y); c = Math.max(c, q.x); e = Math.max(e, q.y); } });
+      out = Object.assign({}, d, { stitches: st, bounds: [a, b, c, e] }); turned = true;
+    }
+    const bytes = kind === 'vp3' ? S.writeVP3(out) : S.writeDST(out, doc.name);
     saveBytes(safeName() + '.' + kind, bytes, 'application/octet-stream');
+    if (turned) setTimeout(() => toast(`Saved turned 90° for the ${hd.name} hoop: the top of the design points LEFT on the machine — hoop the garment with its top (collar) to the left`), 2700);
   }
 
   // ---------------- UI helpers
@@ -2047,11 +2059,14 @@
     });
     if (cur.id === 'custom') parts.push(`<div class="row"><label>Width</label><input type="number" id="cW" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).w || 150)}"><span class="val">in</span></div><div class="row"><label>Height</label><input type="number" id="cH" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).h || 150)}"><span class="val">in</span></div><p class="small" style="margin:0">The Topaz 30 can stitch up to 14.17 × 7.87 in (360 × 200 mm).</p>`);
     parts.push(`<div class="row"><label>Orientation</label><div class="toggle" id="hRot"><button data-v="0" class="${!doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Landscape' : 'Normal'}</button><button data-v="1" class="${doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Portrait' : 'Rotated'}</button></div></div>`);
+    parts.push(`<div class="row"><label>When saving</label><div class="toggle" id="hTurn"><button data-v="auto" class="${doc.machineTurn !== 'off' ? 'on' : ''}">Turn for machine</button><button data-v="off" class="${doc.machineTurn === 'off' ? 'on' : ''}">Keep as drawn</button></div></div>
+      <p class="small" style="margin:0 0 6px">The Topaz 30 holds the long hoops (Royal, Crown, Jewel) with the long side running front-to-back. A design wider than the hoop is across is saved turned 90°, top pointing <b>left</b>, so it fits — hoop the garment the same way (collar/top to the left).</p>`);
     const fi = fitInfo(design());
     if (fi) parts.push(`<p class="small" style="margin:6px 0 0;color:${fi.fits ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) fits this hoop.' : (fi.fitsRot ? '⟳ Fits if you rotate the hoop.' : '✗ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) is bigger than this hoop.')}</p>`);
     parts.push(`<div class="btns" style="margin-top:10px">${btn('hDone', 'Done', 'primary')}${btn('hMore', 'Resize design…')}</div></div>`);
     mount(parts);
     sheet.querySelectorAll('[data-hoop]').forEach(el => el.addEventListener('click', () => { doc.hoopId = el.dataset.hoop; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
+    $('#hTurn').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.machineTurn = b2.dataset.v; autosave(); renderHoopSheet(); }));
     $('#hRot').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.hoopRot = b2.dataset.v === '1'; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
     const cw = $('#cW'), ch = $('#cH');
     const setC = () => { doc.customHoop = { w: Math.min(MAXF.w, parseFloat(cw.value) * IN || 150), h: Math.min(MAXF.w, parseFloat(ch.value) * IN || 150) }; autosave(); updateHoopChip(); fit(); };
