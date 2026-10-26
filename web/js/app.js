@@ -48,6 +48,7 @@
   let drawKind = 'fill';         // Draw tool: fill | satin | run
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
   const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null };   // Pick tool
+  let persp = null;              // fix-perspective mode: { pts: [TL, TR, BR, BL] in mm }
   let imgMove = false;           // drag the picture instead of the view
   let bgSel = false;             // picture selected in Select
   const IN = 25.4;
@@ -378,7 +379,21 @@
     handlePts(bb).forEach(([id, hx, hy]) => { ctx.beginPath(); ctx.rect(hx - 6, hy - 6, 12, 12); ctx.fillStyle = id.length === 2 ? '#4cc2ff' : '#ffffff'; ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.lineWidth = 1.5; ctx.stroke(); });
     ctx.restore();
   }
+  function drawPersp() {
+    if (!persp || !doc.bg) return;
+    const P = persp.pts.map(toPX);
+    ctx.save(); ctx.fillStyle = 'rgba(76,194,255,.12)'; ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2;
+    ctx.beginPath(); P.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath(); ctx.fill(); ctx.stroke();
+    // thirds grid inside the quad so straight lines are easy to line up
+    ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+    const L = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    [1 / 3, 2 / 3].forEach(t => { const a = L(P[0], P[1], t), b = L(P[3], P[2], t), c = L(P[0], P[3], t), d = L(P[1], P[2], t); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.moveTo(c[0], c[1]); ctx.lineTo(d[0], d[1]); ctx.stroke(); });
+    ctx.setLineDash([]);
+    P.forEach((q, i) => { ctx.beginPath(); ctx.arc(q[0], q[1], 11, 0, 7); ctx.fillStyle = '#4cc2ff'; ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = '#16181d'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(['1', '2', '3', '4'][i], q[0], q[1]); });
+    ctx.restore();
+  }
   function drawBgSel() {
+    drawPersp();
     if (!bgSel || !doc.bg || tool !== 'select') return;
     const b = doc.bg, [x, y] = toPX([b.x, b.y]), [x2, y2] = toPX([b.x + b.w, b.y + b.h]);
     ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.setLineDash([]);
@@ -751,6 +766,7 @@
     }
     const p = toMM(e.offsetX, e.offsetY);
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
+    if (persp && !preview) { const k = persp.pts.findIndex(q => { const [x, y] = toPX(q); return Math.hypot(x - e.offsetX, y - e.offsetY) < 24; }); if (k >= 0) { gesture.type = 'perspnode'; gesture.k = k; return; } }
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
       const so = sel();
@@ -819,7 +835,11 @@
       gesture.moved = true; dragId = o.id; dragMode = 'scale';
       hint(kx === ky ? `${Math.round(kx * 100)}%` : `W ${Math.round(kx * 100)}% · H ${Math.round(ky * 100)}%`); draw(); return;
     }
-    if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w; const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; doc.width = nw; gesture.moved = true; draw(); return; }
+    if (gesture.type === 'perspnode') { persp.pts[gesture.k] = toMM(e.offsetX, e.offsetY); gesture.moved = true; draw(); return; }
+    if (gesture.type === 'resizeimg') { const p = toMM(e.offsetX, e.offsetY), b = doc.bg, ar = b.h / b.w;
+      if (e.shiftKey || doc.bgLock === false) { b.w = Math.max(5, p[0] - b.x); b.h = Math.max(5, p[1] - b.y); }
+      else { const nw = Math.max(5, Math.max(p[0] - b.x, (p[1] - b.y) / ar)); b.w = nw; b.h = nw * ar; }
+      doc.width = b.w; gesture.moved = true; draw(); return; }
     if (gesture.type === 'moveimg') { const p = toMM(e.offsetX, e.offsetY); doc.bg.x += p[0] - gesture.last[0]; doc.bg.y += p[1] - gesture.last[1]; gesture.last = p; gesture.moved = true; draw(); return; }
     if (gesture.type === 'pickstroke' && stroke) {
       if (!gesture.moved && Math.hypot(e.offsetX - gesture.start[0], e.offsetY - gesture.start[1]) > 8) gesture.moved = true;
@@ -863,6 +883,7 @@
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && (hit.id !== selId || multi.size)) { multi.clear(); selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); const so = sel(); if (so && (so.type === 'import' || so.type === 'stitches') && Math.abs((so.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); } return; }
+    if (g.type === 'perspnode') return;
     if (g.type === 'resizeimg') { autosave(); renderSheet(); return; }
     if (g.type === 'moveimg') { autosave(); if (window.__imgSheet) renderImageSheet(); return; }
     if (g.type === 'lasso') { const st = stroke; stroke = null; finishLasso(st); return; }
@@ -1800,6 +1821,111 @@
     on('pkDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
   }
 
+  // ---------------- rotate / reshape the tracing picture
+  // The picture is re-drawn ("baked") from the original each time, so turning it many times never blurs it.
+  let origImg = null;
+  const loadImg = src => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+  const bgT = b => (b.t = b.t || { rot: 0, fh: false, fv: false, skx: 0, sky: 0 });
+  function bgBase(b) {
+    // remember the untouched picture and its size the first time it is reshaped
+    if (!b.orig) { b.orig = b.src; b.base = { w: b.w, ax: (b.h / b.w) / (bgImg.naturalHeight / bgImg.naturalWidth) }; }
+    const t = bgT(b);
+    if (!t.rot && !t.skx && !t.sky) {   // fold any free stretch / resize the user did since
+      b.base.w = b.w; const im = origImg && origImg.__src === b.orig ? origImg : null; if (im) b.base.ax = (b.h / b.w) / (im.naturalHeight / im.naturalWidth);
+    }
+  }
+  async function bakeBg(change) {
+    const b = doc.bg; if (!b || !bgImg) return;
+    try {
+      if (!b.orig) bgBase(b);
+      const O = origImg && origImg.__src === b.orig ? origImg : await loadImg(b.orig); O.__src = b.orig; origImg = O;
+      bgBase(b);
+      const t = bgT(b); if (change) change(t);
+      t.rot = ((t.rot % 360) + 540) % 360 - 180;
+      const Wp = O.naturalWidth, Hp = O.naturalHeight, W0 = b.base.w, H0 = W0 * (Hp / Wp) * b.base.ax;
+      const a = t.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), kx = Math.tan(t.skx * Math.PI / 180), ky = Math.tan(t.sky * Math.PI / 180);
+      const fx = t.fh ? -1 : 1, fy = t.fv ? -1 : 1;
+      // A = Flip · Rotate · Skew  (mm -> mm)
+      const K = [[1, kx], [ky, 1]], R = [[c, -sn], [sn, c]];
+      const mul = (P, Q) => [[P[0][0] * Q[0][0] + P[0][1] * Q[1][0], P[0][0] * Q[0][1] + P[0][1] * Q[1][1]], [P[1][0] * Q[0][0] + P[1][1] * Q[1][0], P[1][0] * Q[0][1] + P[1][1] * Q[1][1]]];
+      const A = mul([[fx, 0], [0, fy]], mul(R, K));
+      const cor = [[-W0 / 2, -H0 / 2], [W0 / 2, -H0 / 2], [W0 / 2, H0 / 2], [-W0 / 2, H0 / 2]].map(q => [A[0][0] * q[0] + A[0][1] * q[1], A[1][0] * q[0] + A[1][1] * q[1]]);
+      const xs = cor.map(q => q[0]), ys = cor.map(q => q[1]);
+      const Bw = Math.max(...xs) - Math.min(...xs), Bh = Math.max(...ys) - Math.min(...ys);
+      const r = Math.min(Wp / W0, Hp / H0, 2000 / Math.max(Bw, Bh));
+      const cw = Math.max(2, Math.round(Bw * r)), ch = Math.max(2, Math.round(Bh * r));
+      const cv2 = document.createElement('canvas'); cv2.width = cw; cv2.height = ch;
+      const g = cv2.getContext('2d'); g.imageSmoothingQuality = 'high';
+      g.translate(cw / 2, ch / 2);
+      const sx = r * W0 / Wp, sy = r * H0 / Hp;
+      g.transform(A[0][0] * sx, A[1][0] * sx, A[0][1] * sy, A[1][1] * sy, 0, 0);
+      g.drawImage(O, -Wp / 2, -Hp / 2);
+      const src = cv2.toDataURL('image/png');
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      const img = await loadImg(src);
+      bgImg = img; b.src = src; b.w = Bw; b.h = Bh; b.x = cx - Bw / 2; b.y = cy - Bh / 2;
+      autosave(); draw(); if (window.__imgSheet) renderImageSheet();
+    } catch (e) { console.error(e); toast('Could not reshape the picture'); }
+  }
+  // perspective fix: the 4 corners the user placed become a straight rectangle
+  function homography(src, dst) {   // maps src[i] -> dst[i], 4 points
+    const A = [], B = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i], [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); B.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); B.push(v);
+    }
+    for (let i = 0; i < 8; i++) {   // gaussian elimination
+      let p = i; for (let j = i + 1; j < 8; j++) if (Math.abs(A[j][i]) > Math.abs(A[p][i])) p = j;
+      [A[i], A[p]] = [A[p], A[i]]; [B[i], B[p]] = [B[p], B[i]];
+      for (let j = i + 1; j < 8; j++) { const f = A[j][i] / A[i][i]; for (let k = i; k < 8; k++) A[j][k] -= f * A[i][k]; B[j] -= f * B[i]; }
+    }
+    const h = new Array(8);
+    for (let i = 7; i >= 0; i--) { let s2 = B[i]; for (let k = i + 1; k < 8; k++) s2 -= A[i][k] * h[k]; h[i] = s2 / A[i][i]; }
+    return h.concat([1]);
+  }
+  async function applyPersp() {
+    const b = doc.bg; if (!b || !persp) return;
+    busy(true);
+    try {
+      const Wd = bgImg.naturalWidth, Hd = bgImg.naturalHeight;
+      const toImg = q => [(q[0] - b.x) / b.w * Wd, (q[1] - b.y) / b.h * Hd];
+      const Q = persp.pts.map(toImg);
+      const d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+      const P = persp.pts;
+      const wmm = (d(P[0], P[1]) + d(P[3], P[2])) / 2, hmm = (d(P[0], P[3]) + d(P[1], P[2])) / 2;
+      const r = Math.min(Wd / b.w, 2000 / Math.max(wmm, hmm));
+      const ow = Math.max(2, Math.round(wmm * r)), oh = Math.max(2, Math.round(hmm * r));
+      const H = homography([[0, 0], [ow, 0], [ow, oh], [0, oh]], Q);   // output px -> source px
+      const sc = document.createElement('canvas'); sc.width = Wd; sc.height = Hd; const sg = sc.getContext('2d'); sg.drawImage(bgImg, 0, 0);
+      const S = sg.getImageData(0, 0, Wd, Hd).data;
+      const oc = document.createElement('canvas'); oc.width = ow; oc.height = oh; const og = oc.getContext('2d');
+      const out = og.createImageData(ow, oh), D = out.data;
+      for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
+        const w = H[6] * x + H[7] * y + H[8], u = (H[0] * x + H[1] * y + H[2]) / w, v = (H[3] * x + H[4] * y + H[5]) / w;
+        const x0 = Math.floor(u), y0 = Math.floor(v); if (x0 < 0 || y0 < 0 || x0 >= Wd - 1 || y0 >= Hd - 1) continue;
+        const fx = u - x0, fy = v - y0, o = (y * ow + x) * 4;
+        for (let c = 0; c < 4; c++) {
+          const i0 = (y0 * Wd + x0) * 4 + c;
+          D[o + c] = (S[i0] * (1 - fx) + S[i0 + 4] * fx) * (1 - fy) + (S[i0 + Wd * 4] * (1 - fx) + S[i0 + Wd * 4 + 4] * fx) * fy;
+        }
+      }
+      og.putImageData(out, 0, 0);
+      const src = oc.toDataURL('image/png'), img = await loadImg(src);
+      const cx = P.reduce((s2, q) => s2 + q[0], 0) / 4, cy = P.reduce((s2, q) => s2 + q[1], 0) / 4;
+      bgImg = img; b.src = src; b.orig = src; origImg = null; b.t = null; b.base = { w: wmm, ax: 1 };
+      b.w = wmm; b.h = hmm; b.x = cx - wmm / 2; b.y = cy - hmm / 2;
+      persp = null; autosave(); toast('Perspective fixed — the picture is straightened');
+    } catch (e) { console.error(e); toast('Could not fix perspective'); }
+    busy(false); draw(); renderImageSheet();
+  }
+  async function resetBg() {
+    const b = doc.bg; if (!b || !b.orig) return;
+    const img = await loadImg(b.orig), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    bgImg = img; b.src = b.orig; b.t = null; b.w = b.base.w; b.h = b.base.w * img.naturalHeight / img.naturalWidth; b.base.ax = 1;
+    b.x = cx - b.w / 2; b.y = cy - b.h / 2; autosave(); draw(); renderImageSheet(); toast('Picture reset');
+  }
+
   function renderImageSheet() {
     window.__imgSheet = true;
     if (!doc.bg) { mount([`<div class="sec"><h3>Image</h3><p class="small">No image yet.</p><div class="btns">${btn('iOpen', 'Open image', 'primary')}</div></div>`]); on('iOpen', () => $('#fImage').click()); return; }
@@ -1807,18 +1933,34 @@
     const parts = [`<div class="sec"><h3>Image size (inches)</h3>
       <div class="row"><label>Width</label><input type="number" id="iW" step="0.05" min="0.2" value="${inch(b.w)}"><span class="val">in</span></div>
       <div class="row"><label>Height</label><input type="number" id="iH" step="0.05" min="0.2" value="${inch(b.h)}"><span class="val">in</span></div>
-      <p class="small" style="margin:0 0 6px">Proportions stay locked. Hoop: ${inch(hoop().w)} × ${inch(hoop().h)} in.</p>`,
+      <div class="row"><label>Proportions</label><div class="toggle" id="iLock"><button data-v="1" class="${doc.bgLock !== false ? 'on' : ''}">🔗 Locked</button><button data-v="0" class="${doc.bgLock === false ? 'on' : ''}">Free stretch</button></div></div>
+      <p class="small" style="margin:0 0 6px">Hoop: ${inch(hoop().w)} × ${inch(hoop().h)} in. Free stretch (or hold Shift on the blue corner) changes width and height separately.</p></div>
+      <div class="sec"><h3>Rotate & reshape</h3>
+      <div class="btns" style="margin:0 0 6px">${btn('iR90l', '⟲ 90°', 'sm')}${btn('iR90r', '⟳ 90°', 'sm')}${btn('iR1l', '⟲ 1°', 'sm')}${btn('iR1r', '⟳ 1°', 'sm')}${btn('iFh', '⇋ Flip', 'sm')}${btn('iFv', '⇵ Flip', 'sm')}</div>`,
+      slider('Angle', 'iRot', -180, 180, 0.5, (b.t && b.t.rot) || 0, '°', (v, f) => { if (f) bakeBg(t => { t.rot = v; }); }),
+      slider('Slant ↔', 'iSkx', -40, 40, 0.5, (b.t && b.t.skx) || 0, '°', (v, f) => { if (f) bakeBg(t => { t.skx = v; }); }),
+      slider('Slant ↕', 'iSky', -40, 40, 0.5, (b.t && b.t.sky) || 0, '°', (v, f) => { if (f) bakeBg(t => { t.sky = v; }); }),
+      `<div class="btns" style="margin:6px 0">${persp ? btn('iPApply', '✓ Straighten', 'primary') + btn('iPCancel', 'Cancel') : btn('iPersp', '⬚ Fix perspective (4 corners)')}${b.orig ? btn('iReset', '↺ Reset picture') : ''}</div>
+      <p class="small" style="margin:0 0 6px">${persp ? 'Drag the 4 blue dots onto the corners of something that should be a rectangle (a patch, a sign, a shirt print) — 1 top-left, 2 top-right, 3 bottom-right, 4 bottom-left. Then Straighten.' : 'Straighten a photo taken at an angle, tilt it level, or slant it to match. The picture is only a tracing guide — it is never stitched.'}</p>`,
       slider('Image fade', 'iO', 0, 1, 0.05, doc.bgOpacity, '', v => { doc.bgOpacity = v; draw(); }),
       `<div class="btns" style="margin-top:8px">${btn('iTop', doc.bgOnTop ? '⬇ Send picture to bottom' : '⬆ Bring picture to top', 'primary')}${btn('iFit', 'Fit to hoop')}${btn('iCen', 'Center')}<button class="btn ${imgMove ? 'primary' : ''}" id="iMove">${imgMove ? 'Moving image — tap to stop' : 'Move image'}</button>${btn('iDone', 'Done')}</div></div>`];
     mount(parts);
     const setW = (wmm) => { const ar = b.h / b.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2; b.w = wmm; b.h = wmm * ar; b.x = cx - b.w / 2; b.y = cy - b.h / 2; doc.width = b.w; autosave(); draw(); };
-    $('#iW').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN); $('#iH').value = inch(b.h); } });
-    $('#iH').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { setW(v * IN * b.w / b.h); $('#iW').value = inch(b.w); } });
+    $('#iW').addEventListener('change', e => { const v = parseFloat(e.target.value); if (!(v > 0)) return; if (doc.bgLock === false) { const cx = b.x + b.w / 2; b.w = v * IN; b.x = cx - b.w / 2; doc.width = b.w; autosave(); draw(); return; } setW(v * IN); $('#iH').value = inch(b.h); });
+    $('#iH').addEventListener('change', e => { const v = parseFloat(e.target.value); if (!(v > 0)) return; if (doc.bgLock === false) { const cy = b.y + b.h / 2; b.h = v * IN; b.y = cy - b.h / 2; autosave(); draw(); return; } setW(v * IN * b.w / b.h); $('#iW').value = inch(b.w); });
+    const lk = $('#iLock'); if (lk) lk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.bgLock = b2.dataset.v === '1'; autosave(); renderImageSheet(); }));
+    on('iR90l', () => bakeBg(t => { t.rot -= 90; })); on('iR90r', () => bakeBg(t => { t.rot += 90; }));
+    on('iR1l', () => bakeBg(t => { t.rot -= 1; })); on('iR1r', () => bakeBg(t => { t.rot += 1; }));
+    on('iFh', () => bakeBg(t => { t.fh = !t.fh; })); on('iFv', () => bakeBg(t => { t.fv = !t.fv; }));
+    on('iPersp', () => { const m = Math.min(b.w, b.h) * 0.08; persp = { pts: [[b.x + m, b.y + m], [b.x + b.w - m, b.y + m], [b.x + b.w - m, b.y + b.h - m], [b.x + m, b.y + b.h - m]] }; imgMove = false; renderImageSheet(); draw(); });
+    on('iPApply', applyPersp);
+    on('iPCancel', () => { persp = null; renderImageSheet(); draw(); });
+    on('iReset', resetBg);
     on('iTop', () => { doc.bgOnTop = !doc.bgOnTop; autosave(); renderImageSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); });
     on('iFit', () => { const h = hoop(), ar = b.h / b.w; let w = h.w * 0.94, hh = w * ar; if (hh > h.h * 0.94) { hh = h.h * 0.94; w = hh / ar; } b.w = w; b.h = hh; b.x = (h.w - w) / 2; b.y = (h.h - hh) / 2; autosave(); renderImageSheet(); draw(); });
     on('iCen', () => { const h = hoop(); b.x = (h.w - b.w) / 2; b.y = (h.h - b.h) / 2; autosave(); draw(); });
     on('iMove', () => { imgMove = !imgMove; renderImageSheet(); });
-    on('iDone', () => { imgMove = false; window.__imgSheet = false; renderSheet(); });
+    on('iDone', () => { imgMove = false; persp = null; window.__imgSheet = false; renderSheet(); draw(); });
   }
 
   function renderBrushSheet() {
