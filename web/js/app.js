@@ -1706,10 +1706,54 @@
     if (tool === 'auto') return renderAutoSheet();
     if (tool === 'stream') return renderStreamSheet();
     if (tool === 'layers') return renderLayers();
+    if (multi.size > 1) return renderMultiSheet();
     const o = sel();
     if (!o && bgSel && doc.bg) { hint('Drag the picture to move it · drag the blue corner to resize'); return renderImageSheet(); }
     if (!o) { sheet.innerHTML = ''; syncSheetBar(); hint(doc.objects.length ? 'Tap a shape to edit it' : 'Open an image from the menu, then trace it or tap Auto'); return; }
     renderProps(o);
+  }
+
+  // several layers selected (Ctrl/Cmd+click): change them all at once
+  function renderMultiSheet() {
+    const objs = doc.objects.filter(x => multi.has(x.id));
+    const fills = objs.filter(x => x.type === 'fill'), cols = objs.filter(x => x.type === 'satin' || x.type === 'border');
+    const common = (list, k, d) => { const v = list.map(x => x[k] == null ? d : x[k]); return v.every(q => q === v[0]) ? v[0] : null; };
+    const parts = [`<div class="sec"><h3>${objs.length} layers selected</h3><p class="small" style="margin:0 0 8px">Changes here apply to all of them at once.${fills.length && cols.length ? ` (${fills.length} fill${fills.length > 1 ? 's' : ''}, ${cols.length} satin/streamline column${cols.length > 1 ? 's' : ''})` : ''}</p>`];
+    const presetRow = (id, list, d) => { const cv2 = common(list, 'spacing', d); return `<div class="row"><label>Preset</label><div class="toggle" id="${id}">${DENS.map(([l, v]) => `<button data-v="${v}" class="${cv2 === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`; };
+    const applyAll = (list, k, v, final) => { list.forEach(x => { x[k] = v; }); draw(); if (final) { commit(); renderSheet(); } };
+    if (fills.length) {
+      const cv2 = common(fills, 'spacing', 0.4);
+      parts.push(`</div><div class="sec"><h3>Fills · density</h3>`, presetRow('mFillPre', fills, 0.4));
+      parts.push(slider('Density' + (cv2 == null ? ' (mixed)' : ''), 'mfd', 0.15, 1.2, 0.01, cv2 == null ? 0.32 : cv2, ' mm', (v, f) => applyAll(fills, 'spacing', v, f)));
+      const sl = common(fills, 'stitchLen', 3.5);
+      parts.push(slider('Stitch length' + (sl == null ? ' (mixed)' : ''), 'mfs', 1.5, 12, 0.1, sl == null ? 3.5 : sl, ' mm', (v, f) => applyAll(fills, 'stitchLen', v, f)));
+      const lk = common(fills, 'satinLook', false);
+      parts.push(`<div class="row"><label>Style</label><div class="toggle" id="mLook"><button data-v="satin" class="${lk === true ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${lk === false ? 'on' : ''}">Tatami</button></div></div>`);
+      parts.push(`<p class="small" style="margin:0">Tip: fills look solid at about 0.32 (Dense).</p>`);
+    }
+    if (cols.length) {
+      const cv2 = common(cols, 'spacing', 0.4);
+      parts.push(`</div><div class="sec"><h3>Satin & streamline columns · density</h3>`, presetRow('mColPre', cols, 0.4));
+      parts.push(slider('Density' + (cv2 == null ? ' (mixed)' : ''), 'mcd', 0.12, 1, 0.01, cv2 == null ? 0.4 : cv2, ' mm', (v, f) => applyAll(cols, 'spacing', v, f)));
+      parts.push(`<p class="small" style="margin:0">Tip: columns already look solid at 0.40 (Standard).</p>`);
+    }
+    const all = fills.concat(cols);
+    if (all.length) {
+      const pc = common(all, 'pullComp', 0.2);
+      parts.push(`</div><div class="sec"><h3>All</h3>`, slider('Pull comp' + (pc == null ? ' (mixed)' : ''), 'mpc', 0, 0.6, 0.01, pc == null ? 0.25 : pc, ' mm', (v, f) => applyAll(all, 'pullComp', v, f)));
+      const ul = common(all, 'underlay', true);
+      parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="mUnder"><button data-v="1" class="${ul === true ? 'on' : ''}">On</button><button data-v="0" class="${ul === false ? 'on' : ''}">Off</button></div></div>`);
+    }
+    parts.push(colorPicker(common(objs, 'color', null) || '#000000', c => { objs.forEach(x => { x.color = c; }); commit(); renderSheet(); draw(); }));
+    parts.push(`<div class="btns" style="margin-top:10px">${btn('mDel', `Delete ${objs.length} layers`, 'danger')}${btn('mClear', 'Clear selection')}</div></div>`);
+    mount(parts);
+    const tgl = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); commit(); renderSheet(); draw(); })); };
+    tgl('mFillPre', v => fills.forEach(x => { x.spacing = +v; }));
+    tgl('mColPre', v => cols.forEach(x => { x.spacing = +v; }));
+    tgl('mLook', v => fills.forEach(x => { x.satinLook = v === 'satin'; x.sand = false; x.stitchLen = x.satinLook ? 12 : 3.5; }));
+    tgl('mUnder', v => all.forEach(x => { x.underlay = v === '1'; }));
+    on('mDel', () => { doc.objects = doc.objects.filter(x => !multi.has(x.id)); multi.clear(); selId = null; commit(); renderSheet(); draw(); toast(`Deleted ${objs.length} layers (Undo brings them back)`); });
+    on('mClear', () => { multi.clear(); selId = null; renderSheet(); draw(); });
   }
 
   function renderPickSheet() {
