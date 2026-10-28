@@ -74,6 +74,9 @@
       case 'knockout': { const d = SS.doc(); d.knockout = d.knockout === false; SS.commit(); SS.invalidate(); syncKnock(); SS.draw(); SS.toast(d.knockout === false ? 'Hidden stitches kept (everything sews)' : 'Stitching that a later layer covers is removed'); break; }
       case 'keys': keysModal(); break;
       case 'picTop': SS.picTop(true); break;
+      case 'flipPicH': SS.flipPic('h'); break;
+      case 'flipPicV': SS.flipPic('v'); break;
+      case 'rotPic': SS.rotatePic(90); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
       case 'showall': SS.setSolo(null); layerSig = ''; renderLayers(); break;
@@ -180,8 +183,8 @@
       <button class="it" data-c="solo"><b>${SS.solo() === o.id ? '👁 Show all layers' : '◎ Solo — hide the others'}</b></button>
       <button class="it" data-c="center">Center in hoop</button>${(o.type === 'fill' && o.paths.length > 1) || (o.type === 'import' && o.blocks.length > 1) ? `<button class="it" data-c="isolate"><b>✂ Isolate this ${o.type === 'import' ? 'colour' : 'part'}</b></button>` : ''}${o.type === 'fill' ? `<button class="it" data-c="wrap">${o.wrap ? 'Straight thread angle' : '↻ Wrap thread around shape'}</button>` : ''}${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
-      <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') : ''}`
-      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}${SS.solo() != null ? '<button class="it" data-c="showall"><b>👁 Show all layers</b></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;
+      <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') + '<button class="it" data-c="flipPicH">⇋ Flip picture left–right</button><button class="it" data-c="flipPicV">⇵ Flip picture top–bottom</button><button class="it" data-c="rotPic">⟳ Rotate picture 90°</button>' : ''}`
+      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}${SS.solo() != null ? '<button class="it" data-c="showall"><b>👁 Show all layers</b></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') + '<button class="it" data-c="flipPicH">⇋ Flip picture left–right</button><button class="it" data-c="flipPicV">⇵ Flip picture top–bottom</button><button class="it" data-c="rotPic">⟳ Rotate picture 90°</button>' : ''}`;
     ctx.style.left = e.clientX + 'px'; ctx.style.top = e.clientY + 'px'; ctx.classList.add('open');
     ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
   });
@@ -254,11 +257,12 @@
     if (d.bg) {
       const row = `<div class="lr ${SS.bgSelected() ? 'on' : ''} ${d.bgHidden ? 'hid' : ''}" data-pic="1"><span class="num">–</span><span class="dot" style="background:#666;border-radius:4px"></span>
         <span class="nm"><b>Picture (not stitched)</b><small>${d.bgOnTop ? 'on top · see-through' : 'underneath'}</small></span>
+        <button class="eye" data-pf="1" title="Flip picture left–right"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="m8 7-4 5 4 5z"/><path d="m16 7 4 5-4 5z"/></svg></button>
         <button class="eye" data-pt="1" title="${d.bgOnTop ? 'Send to bottom' : 'Bring to top'}"><svg viewBox="0 0 24 24">${d.bgOnTop ? '<path d="m6 9 6 6 6-6"/>' : '<path d="m6 15 6-6 6 6"/>'}</svg></button>
         <button class="eye" data-pe="1" title="Show / hide"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div>`;
       box.innerHTML = d.bgOnTop ? box.innerHTML + row : row + box.innerHTML;
       const pr = box.querySelector('[data-pic]');
-      pr.addEventListener('click', e => { if (e.target.closest('[data-pt]')) { SS.picTop(); return; } if (e.target.closest('[data-pe]')) { SS.toggleBg(); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.selectPic(); });
+      pr.addEventListener('click', e => { if (e.target.closest('[data-pf]')) { SS.flipPic('h'); return; } if (e.target.closest('[data-pt]')) { SS.picTop(); return; } if (e.target.closest('[data-pe]')) { SS.toggleBg(); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.selectPic(); });
     }
     box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);

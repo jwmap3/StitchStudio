@@ -2568,6 +2568,8 @@
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { multi.clear(); selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
+    flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
+    rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
     setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
