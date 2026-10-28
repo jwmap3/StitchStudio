@@ -79,6 +79,7 @@
       case 'rotPic': SS.rotatePic(90); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
+      case 'selectAll': SS.selectAll(); layerSig = ''; renderLayers(); break;
       case 'showall': SS.setSolo(null); layerSig = ''; renderLayers(); break;
       case 'solo': { const o2 = SS.sel(); if (o2) { SS.setSolo(o2.id); layerSig = ''; renderLayers(); } break; }
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
@@ -120,6 +121,7 @@
     if (c && k.toLowerCase() === 'c') { if (selObj()) { e.preventDefault(); run('copy'); } return; }
     if (c && k.toLowerCase() === 'v') { return; }   // handled by paste event (pictures) / below
     if (c && k.toLowerCase() === 'd') { e.preventDefault(); run('dup'); return; }
+    if (c && k.toLowerCase() === 'a') { e.preventDefault(); SS.selectAll(); layerSig = ''; renderLayers(); return; }
     if (c && (k === '0')) { e.preventDefault(); run('fit'); return; }
     if (c && (k === '1')) { e.preventDefault(); run('actual'); return; }
     if (c && (k === '=' || k === '+')) { e.preventDefault(); run('zin'); return; }
@@ -279,7 +281,7 @@
   // ---------------- status bar + rulers
   let statSig = '', statT = 0, cursor = null;
   function updateStats() {
-    const d = SS.doc(), sig = JSON.stringify(d.objects.map(o => [o.id, o.hidden, o.color])) + d.objects.length + (SS.doc().nextId) + '|' + JSON.stringify(SS.hoop());
+    const d = SS.doc(), sig = JSON.stringify(d.objects.map(o => [o.id, o.hidden, o.color, o.spacing, o.satinLook, (SS.bbox(o) || []).map(v => Math.round(v * 10))])) + d.objects.length + (SS.doc().nextId) + '|' + JSON.stringify(SS.hoop());
     if (sig === statSig) return; statSig = sig;
     clearTimeout(statT); statT = setTimeout(() => {
       let ds; try { ds = SS.design(); } catch (e) { return; }

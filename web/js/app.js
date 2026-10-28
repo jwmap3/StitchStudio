@@ -1772,14 +1772,61 @@
     renderProps(o);
   }
 
+  // ---------------- scale several layers together (around their shared centre)
+  // Every layer is re-stitched at the new size, so density stays the same and the
+  // stitch count follows the area. Imported stitch files are re-stitched too.
+  let keepSewable = true;
+  function groupBox(objs) {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    objs.forEach(o => { const bb = bbox(o); if (!bb) return; a = Math.min(a, bb[0]); b = Math.min(b, bb[1]); c = Math.max(c, bb[2]); d = Math.max(d, bb[3]); });
+    return a === Infinity ? null : [a, b, c, d];
+  }
+  function selectAll() {
+    multi.clear(); doc.objects.forEach(o => { if (!o.hidden) multi.add(o.id); });
+    selId = multi.size ? [...multi][multi.size - 1] : null; bgSel = false; selNode = -1;
+    if (multi.size === 1) multi.clear();
+    if (tool !== 'select') setTool('select', true); else { renderSheet(); draw(); }
+    toast(`${doc.objects.filter(o => !o.hidden).length} layers selected`);
+  }
+  function scaleGroup(objs, k) {
+    if (!objs.length || !(k > 0) || Math.abs(k - 1) < 0.0005) return;
+    const bb = groupBox(objs); if (!bb) return;
+    const before = design().count, c = [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2];
+    objs.forEach(o => xform(o, k, 0, false, false, c));
+    let widened = 0;
+    if (keepSewable && k < 1) {
+      // satin narrower than ~1 mm won't form properly: open it up to 1 mm, still tapered-looking
+      objs.forEach(o => {
+        if (o.type !== 'satin') return;
+        if (o.mode === 'rails') {
+          const P = o.points;
+          for (let i = 0; i + 1 < P.length; i += 2) { const a = P[i], b2 = P[i + 1], w = Math.hypot(b2[0] - a[0], b2[1] - a[1]); if (w < 1) { const mx = (a[0] + b2[0]) / 2, my = (a[1] + b2[1]) / 2; let ux = 1, uy = 0; if (w > 0.01) { ux = (b2[0] - a[0]) / w; uy = (b2[1] - a[1]) / w; } a[0] = mx - ux * 0.5; a[1] = my - uy * 0.5; b2[0] = mx + ux * 0.5; b2[1] = my + uy * 0.5; widened++; } }
+        } else o.points.forEach(q => { if ((q[2] || 3) < 1) { q[2] = 1; widened++; } });
+      });
+    }
+    commit();
+    const after = design().count, imp = objs.filter(o => o.type === 'import' || o.type === 'stitches');
+    renderSheet(); draw();
+    toast(`Scaled to ${Math.round(k * 100)}% · ${inch((bb[2] - bb[0]) * k)} × ${inch((bb[3] - bb[1]) * k)} in · stitches ${before.toLocaleString()} → ${after.toLocaleString()}${widened ? ` · ${widened} thin spots kept sewable` : ''}${imp.length ? ' · imported designs: use ✨ Re-stitch at this size' : ''}`);
+  }
+
   // several layers selected (Ctrl/Cmd+click): change them all at once
   function renderMultiSheet() {
     const objs = doc.objects.filter(x => multi.has(x.id));
     const fills = objs.filter(x => x.type === 'fill'), cols = objs.filter(x => x.type === 'satin' || x.type === 'border');
     const common = (list, k, d) => { const v = list.map(x => x[k] == null ? d : x[k]); return v.every(q => q === v[0]) ? v[0] : null; };
+    const gb = groupBox(objs);
     const parts = [`<div class="sec"><h3>${objs.length} layers selected</h3><p class="small" style="margin:0 0 8px">Changes here apply to all of them at once.${fills.length && cols.length ? ` (${fills.length} fill${fills.length > 1 ? 's' : ''}, ${cols.length} satin/streamline column${cols.length > 1 ? 's' : ''})` : ''}</p>`];
     const presetRow = (id, list, d) => { const cv2 = common(list, 'spacing', d); return `<div class="row"><label>Preset</label><div class="toggle" id="${id}">${DENS.map(([l, v]) => `<button data-v="${v}" class="${cv2 === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`; };
     const applyAll = (list, k, v, final) => { list.forEach(x => { x[k] = v; }); draw(); if (final) { commit(); renderSheet(); } };
+    if (gb) {
+      parts.push(`</div><div class="sec"><h3>Size (together)</h3>
+        <div class="row"><label>Width</label><input type="number" id="gW" step="0.05" min="0.1" value="${inch(gb[2] - gb[0])}"><span class="val">in</span></div>
+        <div class="row"><label>Height</label><input type="number" id="gH" step="0.05" min="0.1" value="${inch(gb[3] - gb[1])}"><span class="val">in</span></div>
+        <div class="btns" style="margin:4px 0 8px">${btn('gS90', '− 10%', 'sm')}${btn('gS95', '− 5%', 'sm')}${btn('gS105', '+ 5%', 'sm')}${btn('gS110', '+ 10%', 'sm')}${btn('gS50', '½ size', 'sm')}${btn('gS200', '2×', 'sm')}</div>
+        <div class="row"><label>Fine details</label><div class="toggle" id="gKeep"><button data-v="1" class="${keepSewable ? 'on' : ''}">Keep sewable</button><button data-v="0" class="${!keepSewable ? 'on' : ''}">Exact</button></div></div>
+        <p class="small" style="margin:0">Proportions stay locked. Every layer is re-stitched at the new size, so the density stays the same and the stitch count changes with the size. “Keep sewable” stops satin from shrinking below 1 mm.</p>`);
+    }
     if (fills.length) {
       const cv2 = common(fills, 'spacing', 0.4);
       parts.push(`</div><div class="sec"><h3>Fills · density</h3>`, presetRow('mFillPre', fills, 0.4));
@@ -1807,6 +1854,13 @@
     parts.push(`<div class="btns" style="margin-top:10px">${btn('mDel', `Delete ${objs.length} layers`, 'danger')}${btn('mClear', 'Clear selection')}</div></div>`);
     mount(parts);
     const tgl = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); commit(); renderSheet(); draw(); })); };
+    if (gb) {
+      const gw = gb[2] - gb[0], gh = gb[3] - gb[1];
+      $('#gW').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) scaleGroup(objs, v * IN / gw); });
+      $('#gH').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) scaleGroup(objs, v * IN / gh); });
+      [['gS90', 0.9], ['gS95', 0.95], ['gS105', 1.05], ['gS110', 1.1], ['gS50', 0.5], ['gS200', 2]].forEach(([id, k]) => on(id, () => scaleGroup(objs, k)));
+      const gk = $('#gKeep'); if (gk) gk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { keepSewable = b2.dataset.v === '1'; renderSheet(); }));
+    }
     tgl('mFillPre', v => fills.forEach(x => { x.spacing = +v; }));
     tgl('mColPre', v => cols.forEach(x => { x.spacing = +v; }));
     tgl('mLook', v => fills.forEach(x => { x.satinLook = v === 'satin'; x.sand = false; x.stitchLen = x.satinLook ? 12 : 3.5; }));
@@ -2350,7 +2404,7 @@
 
   function renderLayers() {
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
-    const parts = ['<div class="sec"><h3>Sew order (top sews first)</h3>'];
+    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}</div>`];
     doc.objects.forEach((o, i) => {
       const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
@@ -2362,6 +2416,7 @@
     if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · ${doc.bgOnTop ? 'on top (see-through)' : 'underneath'}</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     parts.push('</div>');
     mount(parts);
+    on('lSelAll', selectAll);
     const bgRow = sheet.querySelector('[data-bg]');
     if (bgRow) bgRow.addEventListener('click', e => { if (e.target.closest('button')) { doc.bgHidden = !doc.bgHidden; autosave(); renderSheet(); draw(); return; } selId = null; bgSel = true; setTool('select', true); });
     sheet.querySelectorAll('.layer[data-id]').forEach(el => {
@@ -2432,16 +2487,10 @@
       const wIn = parseFloat($('#hWin').value), d0 = design();
       if (k === 1 && wIn > 0 && d0.count) k = wIn * IN / (d0.bounds[2] - d0.bounds[0]);
       if (!k || Math.abs(k - 1) < 0.001) return;
-      const h = hoop(), cx = h.w / 2, cy = h.h / 2, f = q => { q[0] = cx + (q[0] - cx) * k; q[1] = cy + (q[1] - cy) * k; };
-      doc.objects.forEach(o => {
-        if (o.type === 'fill') { o.paths.forEach(l => l.forEach(f)); (o.flow || []).forEach(l => l.forEach(f)); }
-        else if (o.type === 'stitches') o.lines.forEach(l => l.forEach(f));
-        else if (o.type === 'import') o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f)));
-        else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; o.size *= k; if (o.bend) o.bend /= k; layoutText(o); }
-        else o.points.forEach(q => { f(q); if (o.type === 'satin') q[2] *= k; });
-      });
-      if (doc.bg) { const q = [doc.bg.x, doc.bg.y]; f(q); doc.bg.x = q[0]; doc.bg.y = q[1]; doc.bg.w *= k; doc.bg.h *= k; }
-      commit(); toast('Scaled to ' + Math.round(k * 100) + '%'); renderSizeSheet(); draw();
+      const vis = doc.objects.filter(o => !o.hidden), gb0 = groupBox(vis);
+      scaleGroup(vis, k);
+      if (doc.bg && gb0) { const cx = (gb0[0] + gb0[2]) / 2, cy = (gb0[1] + gb0[3]) / 2; doc.bg.x = cx + (doc.bg.x - cx) * k; doc.bg.y = cy + (doc.bg.y - cy) * k; doc.bg.w *= k; doc.bg.h *= k; autosave(); }
+      renderSizeSheet(); draw();
     });
     on('hClose', () => renderSheet());
   }
@@ -2570,7 +2619,7 @@
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
-    setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },

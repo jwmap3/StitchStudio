@@ -672,7 +672,10 @@
       else if (o.type === 'text' && o.glyphs) loops = o.glyphs.flatMap(g => g.paths || []);
       if (!loops || !loops.length) return null;
       const keyObj = o.type === 'fill' ? o.paths : o.glyphs;
-      const hit = MASKS.get(keyObj); if (hit && hit.ul === UNDERLAP) return hit;
+      // geometry fingerprint: shapes are edited in place (move, resize, drag points), so check it still matches
+      let fp = 0, np = 0; loops.forEach(l => { np += l.length; for (let i = 0; i < l.length; i += Math.max(1, l.length >> 3)) fp = (fp * 31 + Math.round(l[i][0] * 100) * 7 + Math.round(l[i][1] * 100)) | 0; });
+      fp = fp + ':' + np;
+      const hit = MASKS.get(keyObj); if (hit && hit.ul === UNDERLAP && hit.fp === fp) return hit;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       loops.forEach(l => l.forEach(q => { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }));
       const pad = 1.0; x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
@@ -708,7 +711,7 @@
         return out;
       };
       const res = { x0, y0, w, h, ul: UNDERLAP, near: morph(m, Math.round(EDGE / CELL), true), deep: morph(m, Math.round(UNDERLAP / CELL), false) };
-      MASKS.set(keyObj, res);
+      res.fp = fp; MASKS.set(keyObj, res);
       return res;
     };
     const look = (mk, p, which) => {
