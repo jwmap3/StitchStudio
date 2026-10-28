@@ -76,6 +76,8 @@
       case 'picTop': SS.picTop(true); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
+      case 'showall': SS.setSolo(null); layerSig = ''; renderLayers(); break;
+      case 'solo': { const o2 = SS.sel(); if (o2) { SS.setSolo(o2.id); layerSig = ''; renderLayers(); } break; }
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
@@ -175,10 +177,11 @@
     ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
+      <button class="it" data-c="solo"><b>${SS.solo() === o.id ? '👁 Show all layers' : '◎ Solo — hide the others'}</b></button>
       <button class="it" data-c="center">Center in hoop</button>${(o.type === 'fill' && o.paths.length > 1) || (o.type === 'import' && o.blocks.length > 1) ? `<button class="it" data-c="isolate"><b>✂ Isolate this ${o.type === 'import' ? 'colour' : 'part'}</b></button>` : ''}${o.type === 'fill' ? `<button class="it" data-c="wrap">${o.wrap ? 'Straight thread angle' : '↻ Wrap thread around shape'}</button>` : ''}${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
       <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') : ''}`
-      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;
+      : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}${SS.solo() != null ? '<button class="it" data-c="showall"><b>👁 Show all layers</b></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') : ''}`;
     ctx.style.left = e.clientX + 'px'; ctx.style.top = e.clientY + 'px'; ctx.classList.add('open');
     ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
   });
@@ -236,14 +239,14 @@
   // ---------------- layers panel (always visible), drag to reorder
   let layerSig = '', dragFrom = null;
   function renderLayers() {
-    const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds();
-    const sig = mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
+    const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds(), so = SS.solo();
+    const sig = so + '|' + mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
     if (sig === layerSig) return; layerSig = sig;
     const box = $('#pcLayers');
     if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
     box.innerHTML = d.objects.map((o, i) => {
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
-      return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden ? 'hid' : ''}" draggable="true" data-id="${o.id}">
+      return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || (so != null && so !== o.id) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
         <span class="num">${i + 1}</span><span class="dot" style="background:${dot}"></span>
         <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
@@ -260,6 +263,7 @@
     box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
+      el.addEventListener('contextmenu', e => { e.preventDefault(); SS.setSolo(o.id); layerSig = ''; renderLayers(); SS.toast(SS.solo() === o.id ? 'Showing only “' + (o.name || TYPE[o.type]) + '” — right-click it again (or Show all) to bring the rest back' : 'All layers shown'); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });
       el.addEventListener('dragstart', e => { dragFrom = o; e.dataTransfer.effectAllowed = 'move'; });
       el.addEventListener('dragover', e => { if (dragFrom) { e.preventDefault(); el.classList.add('dragover'); } });

@@ -76,6 +76,31 @@
     return { fits, fitsRot, machine, w, h: hh };
   }
   const sel = () => doc.objects.find(o => o.id === selId) || null;
+  // Solo: view just one layer (others hidden on screen only — they still save and stitch)
+  let solo = null;
+  const inView = o => solo == null || o.id === solo;
+  function setSolo(id) {
+    solo = (id == null || solo === id) ? null : id;
+    if (solo != null && !doc.objects.some(o => o.id === solo)) solo = null;
+    if (solo != null) { selId = solo; multi.clear(); bgSel = false; }
+    previewCache = null; still.key = null; sprite.key = null;
+    updateSoloBar(); renderSheet(); draw();
+    if (window.onSSSolo) try { window.onSSSolo(solo); } catch (e) { }
+  }
+  function updateSoloBar() {
+    let bar = document.getElementById('soloBar');
+    if (!bar) {
+      bar = document.createElement('div'); bar.id = 'soloBar';
+      bar.style.cssText = 'position:absolute;left:50%;top:44px;transform:translateX(-50%);z-index:7;background:#4cc2ff;color:#0b1220;border-radius:999px;padding:6px 8px 6px 14px;font:600 13px system-ui;display:none;align-items:center;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,.4)';
+      (cv.parentElement || document.body).appendChild(bar);
+      bar.addEventListener('pointerdown', e => e.stopPropagation());
+    }
+    const o = solo != null && doc.objects.find(x => x.id === solo);
+    if (!o) { bar.style.display = 'none'; return; }
+    bar.innerHTML = `<span>Solo: ${esc(o.name || o.type)} — others hidden</span><button style="border:0;border-radius:999px;background:#0b1220;color:#fff;padding:5px 12px;font:600 12px system-ui;cursor:pointer">Show all</button>`;
+    bar.querySelector('button').addEventListener('click', () => setSolo(null));
+    bar.style.display = 'flex';
+  }
   // Ctrl/Cmd+click: several layers selected at once (e.g. to delete them together)
   const multi = new Set();
   function toggleMulti(id) {
@@ -189,8 +214,8 @@
     }
     return out;
   }
-  function design() {
-    const objs = expand(doc.objects);
+  function design(viewOnly) {
+    const objs = expand(viewOnly ? doc.objects.filter(inView) : doc.objects);
     // build with the cached pieces
     const fake = objs.map(o => Object.assign({}, o, { __p: pieces(o) }));
     const orig = S.objectPieces;
@@ -233,7 +258,7 @@
     const d = fab.querySelector('#fabDone'); d.disabled = !ok; d.style.opacity = ok ? '1' : '.45';
     d.textContent = draft && draft.rails && draft.closed ? '✓ Stitch loop' : '✓ Stitch it';
   }
-  function draw() { updateUndo(); updateFab(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
+  function draw() { if (solo != null && !doc.objects.some(o => o.id === solo)) { solo = null; previewCache = null; updateSoloBar(); } updateUndo(); updateFab(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
   function drawFromFrame() {
     const r = cv.getBoundingClientRect(), dpr = cv.width / r.width, f = frame.view, k = view.s / f.s;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -340,7 +365,7 @@
     }
   }
   function drawDesign() {
-    const list = doc.objects.filter(o => o.id !== sceneSkip);
+    const list = doc.objects.filter(o => o.id !== sceneSkip && inView(o));
     if (doc.realistic === false && selId !== null) {
       // simple view: dim everything except the selected layer
       ctx.save(); ctx.globalAlpha = 0.55; drawObjects(list.filter(o => o.id !== selId)); ctx.restore();
@@ -534,7 +559,7 @@
 
   let previewCache = null;
   function drawPreview() {
-    if (!previewCache) previewCache = design();
+    if (!previewCache) previewCache = design(solo != null);
     const d = previewCache;
     const layers = []; let ci = 0, cur = null, line = null;
     const newLayer = () => { cur = { color: d.colors[ci] ? d.colors[ci].color : '#000000', lines: [] }; layers.push(cur); line = null; };
@@ -581,7 +606,7 @@
   function hitObject(p) {
     const tol = 10 / view.s;
     for (let i = doc.objects.length - 1; i >= 0; i--) {
-      const o = doc.objects[i]; if (o.hidden) continue;
+      const o = doc.objects[i]; if (o.hidden || !inView(o)) continue;
       if (o.type === 'fill' && pointInLoops(p, o.paths)) return o;
       if (o.type === 'text' || o.type === 'stitches' || o.type === 'import') { const bb = bbox(o); if (bb && p[0] >= bb[0] - tol && p[0] <= bb[2] + tol && p[1] >= bb[1] - tol && p[1] <= bb[3] + tol) return o; }
       if (o.type === 'satin' && o.mode === 'rails') { const R = S.streamRails(o); if (R && (R.closed ? (pointInLoops(p, [R.A, R.B])) : pointInLoops(p, [R.A.concat(R.B.slice().reverse())]))) return o; continue; }
@@ -2123,7 +2148,8 @@
       parts.push(transformPanel(o));
       parts.push(`</div><div class="sec"><div class="btns">${o.blocks.length > 1 ? btn('pIso', '✂ Isolate colour') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
       mount(parts); bindTransform(o);
-      on('pIso', () => { isoArm = true; hint('Tap the stitches of the colour to split off'); toast('Now tap the colour you want as its own layer'); });
+      on('pSolo', () => setSolo(o.id));
+    on('pIso', () => { isoArm = true; hint('Tap the stitches of the colour to split off'); toast('Now tap the colour you want as its own layer'); });
       $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { renderProps.blk = +b2.dataset.i; renderSheet(); }));
       on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
       on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
@@ -2192,7 +2218,7 @@
     if (o.type === 'text') parts.push(borderPanel(o));
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
     parts.push(transformPanel(o));
-    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
+    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
     if (o.type === 'text') bindText(o);
@@ -2349,7 +2375,7 @@
 
   const FABRICS = [['#f4f3ef', 'White'], ['#e9e7e1', 'Natural'], ['#1a1a1c', 'Black'], ['#1c2541', 'Navy'], ['#2648a8', 'Royal blue'], ['#8e1b1b', 'Red'], ['#7d8086', 'Gray'], ['#c8b48a', 'Khaki'], ['#2f4f2f', 'Forest']];
   function renderPreviewSheet() {
-    const d = previewCache || (previewCache = design());
+    const d = previewCache || (previewCache = design(solo != null));
     const b = d.bounds, wmm = b[2] - b[0], hmm = b[3] - b[1];
     const mins = Math.round(d.count / 600 + d.trims * 0.1 + d.colors.length * 0.5);
     const parts = ['<div class="sec"><h3>Realistic preview</h3>',
@@ -2542,9 +2568,9 @@
     invalidate() { previewCache = null; }, doc: () => doc, sel, selId: () => selId, tool: () => tool, preview: () => preview, view: () => view, cv,
     select(id) { multi.clear(); selId = id; bgSel = false; selNode = -1; renderSheet(); draw(); },
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
-    setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
-    autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
+    autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
     openFileInput(id, file) { const inp = $(id); const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files; inp.dispatchEvent(new Event('change')); },
     setPreview(on) { if (preview !== !!on) $('#bPreview').click(); },
