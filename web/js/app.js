@@ -77,7 +77,7 @@
   }
   const sel = () => doc.objects.find(o => o.id === selId) || null;
   // Solo: view just one layer (others hidden on screen only — they still save and stitch)
-  let solo = null;
+  let solo = null, pickMany = false;
   const inView = o => solo == null || o.id === solo;
   function setSolo(id) {
     solo = (id == null || solo === id) ? null : id;
@@ -1816,9 +1816,17 @@
     const fills = objs.filter(x => x.type === 'fill'), cols = objs.filter(x => x.type === 'satin' || x.type === 'border');
     const common = (list, k, d) => { const v = list.map(x => x[k] == null ? d : x[k]); return v.every(q => q === v[0]) ? v[0] : null; };
     const gb = groupBox(objs);
+    const dens = objs.filter(x => ['fill', 'satin', 'border', 'text'].includes(x.type) && !x.sand);
     const parts = [`<div class="sec"><h3>${objs.length} layers selected</h3><p class="small" style="margin:0 0 8px">Changes here apply to all of them at once.${fills.length && cols.length ? ` (${fills.length} fill${fills.length > 1 ? 's' : ''}, ${cols.length} satin/streamline column${cols.length > 1 ? 's' : ''})` : ''}</p>`];
     const presetRow = (id, list, d) => { const cv2 = common(list, 'spacing', d); return `<div class="row"><label>Preset</label><div class="toggle" id="${id}">${DENS.map(([l, v]) => `<button data-v="${v}" class="${cv2 === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`; };
     const applyAll = (list, k, v, final) => { list.forEach(x => { x[k] = v; }); draw(); if (final) { commit(); renderSheet(); } };
+    if (dens.length) {
+      const cu = common(dens, 'spacing', 0.4);
+      parts.push(`</div><div class="sec"><h3>Density · all ${dens.length} the same</h3>
+        <div class="row"><label>Preset</label><div class="toggle" id="mAllPre">${DENS.map(([l, v]) => `<button data-v="${v}" class="${cu === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`);
+      parts.push(slider('Density' + (cu == null ? ' (mixed — pick one)' : ''), 'mad', 0.15, 1.2, 0.01, cu == null ? 0.32 : cu, ' mm', (v, f) => { dens.forEach(x => { x.spacing = v; if (x.type === 'text') layoutText(x); }); draw(); if (f) { commit(); renderSheet(); toast(`All ${dens.length} set to ${v.toFixed(2)} mm`); } }));
+      parts.push(`<p class="small" style="margin:0">One setting for every selected fill, satin, streamline column and text. Use the sections below to set fills and columns separately instead.</p>`);
+    }
     if (gb) {
       parts.push(`</div><div class="sec"><h3>Size (together)</h3>
         <div class="row"><label>Width</label><input type="number" id="gW" step="0.05" min="0.1" value="${inch(gb[2] - gb[0])}"><span class="val">in</span></div>
@@ -1861,6 +1869,7 @@
       [['gS90', 0.9], ['gS95', 0.95], ['gS105', 1.05], ['gS110', 1.1], ['gS50', 0.5], ['gS200', 2]].forEach(([id, k]) => on(id, () => scaleGroup(objs, k)));
       const gk = $('#gKeep'); if (gk) gk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { keepSewable = b2.dataset.v === '1'; renderSheet(); }));
     }
+    tgl('mAllPre', v => { dens.forEach(x => { x.spacing = +v; if (x.type === 'text') layoutText(x); }); toast(`All ${dens.length} set to ${(+v).toFixed(2)} mm`); });
     tgl('mFillPre', v => fills.forEach(x => { x.spacing = +v; }));
     tgl('mColPre', v => cols.forEach(x => { x.spacing = +v; }));
     tgl('mLook', v => fills.forEach(x => { x.satinLook = v === 'satin'; x.sand = false; x.stitchLen = x.satinLook ? 12 : 3.5; }));
@@ -2404,11 +2413,11 @@
 
   function renderLayers() {
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
-    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}</div>`];
+    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
     doc.objects.forEach((o, i) => {
       const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
-      parts.push(`<div class="layer ${o.id === selId ? 'on' : ''}" data-id="${o.id}"><span class="dot" style="background:${dotBg}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]} · ${n.toLocaleString()} st</span></span>
+      parts.push(`<div class="layer ${o.id === selId || (pickMany && multi.has(o.id)) ? 'on' : ''}" data-id="${o.id}">${pickMany ? `<span style="font-size:20px;width:22px">${multi.has(o.id) ? '☑' : '☐'}</span>` : ''}<span class="dot" style="background:${dotBg}"></span><span class="nm">${esc(o.name || o.type)}<br><span class="meta">${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]} · ${n.toLocaleString()} st</span></span>
         <button class="ib" data-a="up" aria-label="Sew earlier"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
         <button class="ib" data-a="down" aria-label="Sew later"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <button class="ib" data-a="eye" aria-label="Show or hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.5-1"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
@@ -2416,13 +2425,20 @@
     if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · ${doc.bgOnTop ? 'on top (see-through)' : 'underneath'}</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     parts.push('</div>');
     mount(parts);
-    on('lSelAll', selectAll);
+    on('lSelAll', () => { pickMany = false; selectAll(); });
+    on('lPickMany', () => {
+      if (!pickMany) { pickMany = true; multi.clear(); renderLayers(); return; }
+      pickMany = false;
+      if (multi.size > 1) { selId = [...multi][multi.size - 1]; setTool('select', true); }
+      else { const one = [...multi][0]; multi.clear(); if (one != null) { selId = one; setTool('select', true); } else renderLayers(); }
+    });
     const bgRow = sheet.querySelector('[data-bg]');
     if (bgRow) bgRow.addEventListener('click', e => { if (e.target.closest('button')) { doc.bgHidden = !doc.bgHidden; autosave(); renderSheet(); draw(); return; } selId = null; bgSel = true; setTool('select', true); });
     sheet.querySelectorAll('.layer[data-id]').forEach(el => {
       const o = doc.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => {
         const a = e.target.closest('button'); if (a) { e.stopPropagation(); if (a.dataset.a === 'up') move(o, -1); else if (a.dataset.a === 'down') move(o, 1); else { o.hidden = !o.hidden; commit(); renderSheet(); draw(); } return; }
+        if (pickMany) { if (multi.has(o.id)) multi.delete(o.id); else multi.add(o.id); renderLayers(); draw(); return; }
         selId = o.id; bgSel = false; selNode = -1; setTool('select', true);
       });
     });
