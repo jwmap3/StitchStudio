@@ -47,7 +47,7 @@
   let autoPickSrc = false;      // Auto: next tap on the picture adds its colour to the palette
   let drawKind = 'fill';         // Draw tool: fill | satin | run
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
-  const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null };   // Pick tool
+  const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null, edge: 'none', edgeW: 2, edgeCol: null };   // Pick tool
   let persp = null;              // fix-perspective mode: { pts: [TL, TR, BR, BL] in mm }
   let imgMove = false;           // drag the picture instead of the view
   let bgSel = false;             // picture selected in Select
@@ -634,14 +634,18 @@
     const last = objs.reduce((m, o) => doc.objects.indexOf(o) > doc.objects.indexOf(m) ? o : m, objs[0]);
     borderFromLoops(L, width, color, objs.length === doc.objects.filter(o => !o.hidden).length ? 'Design' : 'Shape', last, SL.grow);
   }
-  function borderFromLoops(paths, width, color, baseName, afterObj, inset) {
-    inset = inset || 0;
+  function borderFromLoops(paths, width, color, baseName, afterObj, inset, opts) {
+    inset = inset || 0; opts = opts || {};
     const made = [];
     paths.forEach(l0 => {
       if (l0.length < 3) return;
       // tidy the outline: drop tiny wiggles but keep real corners
-      let l = T.simplify(l0.map(q => [q[0], q[1]]), 0.12);
+      // picked outlines are pixel-traced: straighten the jaggies but keep real corners sharp
+      let l = opts.smooth ? T.simplify(T.smoothLoop(l0.map(q => [q[0], q[1]]), 0.22, 40), 0.06) : T.simplify(l0.map(q => [q[0], q[1]]), 0.12);
       if (l.length < 3) return;
+      // specks and tiny holes are too small to frame: skip them
+      const per = l.reduce((t, q, i) => t + Math.hypot(l[(i + 1) % l.length][0] - q[0], l[(i + 1) % l.length][1] - q[1]), 0);
+      if (Math.abs(T.area(l)) < width * width * 1.5 || per < width * 5) return;
       const n = l.length, half = width / 2;
       // which way is "outside" for this outline?
       const nrm = i => { const a = l[(i - 1 + n) % n], b = l[i], c = l[(i + 1) % n];
@@ -649,7 +653,7 @@
         const L1 = Math.hypot(...n1) || 1, L2 = Math.hypot(...n2) || 1;
         const u1 = [n1[0] / L1, n1[1] / L1], u2 = [n2[0] / L2, n2[1] / L2];
         let m = [u1[0] + u2[0], u1[1] + u2[1]]; const Lm = Math.hypot(...m) || 1; m = [m[0] / Lm, m[1] / Lm];
-        const cosH = Math.max(0.35, m[0] * u1[0] + m[1] * u1[1]);   // miter, limited at sharp tips
+        const cosH = Math.max(opts.smooth ? 0.5 : 0.35, m[0] * u1[0] + m[1] * u1[1]);   // miter, limited at sharp tips
         return [m[0] / cosH, m[1] / cosH]; };
       // test the direction at the longest edge's midpoint
       let k = 0, best = 0; for (let i = 0; i < n; i++) { const d = Math.hypot(l[(i + 1) % n][0] - l[i][0], l[(i + 1) % n][1] - l[i][1]); if (d > best) { best = d; k = i; } }
@@ -663,11 +667,13 @@
       }
       made.push({ type: 'satin', mode: 'rails', closed: true, curve: false, name: baseName + ' · border', points: pts, spacing: 0.36, underlay: true, pullComp: 0.15, color });
     });
-    if (!made.length) { toast('Nothing to border'); return; }
+    if (!made.length) { if (!opts.quiet) toast('Nothing to border'); return []; }
     const at = doc.objects.indexOf(afterObj);
     made.forEach((m, i) => { m.id = doc.nextId++; doc.objects.splice(at + 1 + i, 0, m); });
+    if (opts.keepSel) return made;
     selId = made[0].id; selNode = -1; commit(); renderSheet(); draw();
     toast(`Satin border added (${width} mm${made.length > 1 ? ', ' + made.length + ' outlines' : ''}) — it sews right after. Tap it in Stream to drag points.`);
+    return made;
   }
   // ---------------- isolate one piece of a layer into its own layer (e.g. just the "3")
   let isoArm = false;
@@ -1281,7 +1287,14 @@
       busy(false);
       if (!r) return;
       const satin = pick.style === 'satin';
-      addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + (pick.thread ? threadName(pick.thread) : r.col), paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: pick.thread || r.col });
+      const o = addObject({ type: 'fill', name: (pick.scope === 'colour' ? 'Colour ' : 'Area ') + (pick.thread ? threadName(pick.thread) : r.col), paths: r.loops, angle: 0, spacing: pick.density, stitchLen: satin ? 12 : 3.5, underlay: true, pullComp: satin ? 0.15 : 0.2, satinLook: satin, color: pick.thread || r.col });
+      if (pick.edge !== 'none') {
+        const made = borderFromLoops(o.paths, pick.edgeW, pick.edgeCol || o.color, o.name, o, 0, { keepSel: true, quiet: true, smooth: true }) || [];
+        if (pick.edge === 'only') { doc.objects = doc.objects.filter(x => x !== o); selId = made.length ? made[0].id : null; }
+        commit(); renderSheet(); draw();
+        toast(made.length ? (pick.edge === 'only' ? `Satin edge only — ${made.length} outline${made.length > 1 ? 's' : ''}` : `Fill + satin edge (${made.length} outline${made.length > 1 ? 's' : ''})`) : 'Shape too small for an edge');
+        if (pick.edge === 'only') return;
+      }
       hint('Now swipe across the shape the way the thread should run');
     }, 20);
   }
@@ -1789,16 +1802,25 @@
       `<div class="row"><label>Pick</label><div class="toggle" id="pkScope"><button data-v="area" class="${pick.scope === 'area' ? 'on' : ''}">Touching area</button><button data-v="colour" class="${pick.scope === 'colour' ? 'on' : ''}">Whole colour</button></div></div>`,
       `<div class="row"><label>Stitch</label><div class="toggle" id="pkStyle"><button data-v="satin" class="${pick.style === 'satin' ? 'on' : ''}">Satin look</button><button data-v="tatami" class="${pick.style !== 'satin' ? 'on' : ''}">Tatami</button></div></div>`,
       densityPresets(step2 ? o : null),
-      slider('Tolerance', 'pkt', 5, 120, 1, pick.tol, '', v => pick.tol = v));
+      slider('Tolerance', 'pkt', 5, 120, 1, pick.tol, '', v => pick.tol = v),
+      `<div class="row"><label>Satin edge</label><div class="toggle" id="pkEdge"><button data-v="none" class="${pick.edge === 'none' ? 'on' : ''}">None</button><button data-v="edge" class="${pick.edge === 'edge' ? 'on' : ''}">Fill + edge</button><button data-v="only" class="${pick.edge === 'only' ? 'on' : ''}">Edge only</button></div></div>`);
+    if (pick.edge !== 'none') parts.push(
+      `<div class="row"><label>Edge width</label><div class="toggle" id="pkEW">${[[1.2, 'Thin'], [2, 'Medium'], [3, 'Wide'], [4, 'Bold']].map(([v, l]) => `<button data-v="${v}" class="${pick.edgeW === v ? 'on' : ''}">${l} ${v}</button>`).join('')}</div></div>`,
+      `<div class="row"><label>Edge colour</label><div class="swatches" id="pkEC" style="flex:1"><button class="btn sm ${!pick.edgeCol ? 'primary' : ''}" data-c="" style="border-radius:999px">Same</button>${favs.map(c => `<button class="sw ${c === pick.edgeCol ? 'on' : ''}" data-c="${c}" style="background:${c};width:28px;height:28px" title="${threadName(c)}"></button>`).join('')}</div></div>`,
+      `<p class="small" style="margin:0 0 6px">Each pick gets a smooth satin band around its whole outline${pick.scope === 'colour' ? ' — every piece of that colour, including the holes' : ''}. Tiny specks are skipped.</p>`);
     if (step2) {
       parts.push(`</div><div class="sec"><h3>${esc(o.name || 'Layer')} · ${o.flow ? 'curved flow' : (o.angle || 0) + '°'}</h3>`);
       parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
-      parts.push(`<div class="btns" style="margin-top:10px">${o.flow ? btn('pkStraight', 'Make straight') : ''}${btn('pkNext', 'Next colour', 'primary')}${btn('pkDel', 'Delete layer', 'danger')}</div>`);
+      parts.push(`<div class="btns" style="margin-top:10px">${o.flow ? btn('pkStraight', 'Make straight') : ''}${btn('pkNext', 'Next colour', 'primary')}${btn('pkEdgeAdd', '＋ Satin edge on this')}${btn('pkDel', 'Delete layer', 'danger')}</div>`);
     }
     parts.push('<p class="small" style="margin:8px 0 0">Pick big background colours first and details last. One finger: tap = pick a colour, swipe = thread direction of the selected layer (select any layer in Layers to re-aim it). Two fingers: move/zoom.</p></div>');
     mount(parts);
     const tg = (id, fn) => $('#' + id).querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSheet(); }));
     tg('pkScope', v => pick.scope = v);
+    tg('pkEdge', v => pick.edge = v);
+    const ew = $('#pkEW'); if (ew) ew.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { pick.edgeW = +b2.dataset.v; renderSheet(); }));
+    const ec = $('#pkEC'); if (ec) ec.querySelectorAll('[data-c]').forEach(b2 => b2.addEventListener('click', () => { pick.edgeCol = b2.dataset.c || null; renderSheet(); }));
+    on('pkEdgeAdd', () => { if (o && o.type === 'fill') { borderFromLoops(o.paths, pick.edgeW || 2, pick.edgeCol || o.color, o.name || 'Fill', o, 0, { keepSel: true, smooth: true }); commit(); renderSheet(); draw(); toast('Satin edge added around this layer'); } });
     $('#pkFav').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => {
       const i = +b2.dataset.i, c = favs[i];
       if (favEdit >= 0) { favEdit = i; renderSheet(); return; }
@@ -2134,8 +2156,8 @@
     if (o.type === 'fill') {
       const bc = borderCol || o.color;
       parts.push(`</div><div class="sec"><h3>Edge border</h3><p class="small" style="margin:0 0 6px">A smooth satin band around the edge of this shape, like the rim on a Star of Life patch.</p>
-        <div class="row"><label>Around</label><div class="toggle" id="bdT">${[['layer', 'This layer'], ['sel', multi.size > 1 ? `Selected (${multi.size})` : 'Selected'], ['all', 'Whole design']].map(([v, l]) => `<button data-v="${v}" class="${borderTarget === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-        <p class="small" style="margin:0 0 6px">${borderTarget === 'layer' ? 'Follows this layer’s own edges.' : borderTarget === 'sel' ? 'One border around the outside of all the layers you Ctrl+clicked, as one shape.' : 'One border around the outside of everything, as one shape.'}</p>
+        <div class="row"><label>Around</label><div class="toggle" id="bdT">${[['layer', 'This layer'], ['colour', 'This colour'], ['sel', multi.size > 1 ? `Selected (${multi.size})` : 'Selected'], ['all', 'Whole design']].map(([v, l]) => `<button data-v="${v}" class="${borderTarget === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <p class="small" style="margin:0 0 6px">${borderTarget === 'layer' ? 'Follows this layer’s own edges.' : borderTarget === 'colour' ? 'One border around every layer of this thread colour, as one shape.' : borderTarget === 'sel' ? 'One border around the outside of all the layers you Ctrl+clicked, as one shape.' : 'One border around the outside of everything, as one shape.'}</p>
         <div class="row"><label>Width</label><div class="toggle" id="bdW">${[[1.5, 'Thin'], [2.5, 'Medium'], [3.5, 'Wide']].map(([v, l]) => `<button data-v="${v}" class="${borderW === v ? 'on' : ''}">${l} ${v}</button>`).join('')}</div></div>
         <div class="row"><label>Colour</label><div class="swatches" id="bdC" style="flex:1">${[o.color, '#000000', '#ffffff', '#c8102e', '#0b2a6b', '#d49b2a', '#9e9e9e', '#1b5e20'].map(c => `<button class="sw ${c === bc ? 'on' : ''}" data-c="${c}" style="background:${c};width:28px;height:28px" title="${threadName(c)}"></button>`).join('')}</div></div>
         <div class="btns" style="margin-top:6px">${btn('bdAdd', '＋ Add satin border', 'primary')}</div>`);
@@ -2191,7 +2213,7 @@
     on('bdAdd', () => {
       const col = borderCol || o.color;
       if (borderTarget === 'layer') { addSatinBorder(o, borderW, col); return; }
-      const objs = borderTarget === 'all' ? doc.objects.filter(x => !x.hidden) : (multi.size > 1 ? doc.objects.filter(x => multi.has(x.id)) : [o]);
+      const objs = borderTarget === 'all' ? doc.objects.filter(x => !x.hidden) : borderTarget === 'colour' ? doc.objects.filter(x => !x.hidden && (x.color || '').toLowerCase() === (o.color || '').toLowerCase() && x.type === 'fill') : (multi.size > 1 ? doc.objects.filter(x => multi.has(x.id)) : [o]);
       busy(true); setTimeout(() => { try { addBorderAround(objs, borderW, col); } finally { busy(false); } }, 30);
     });
     on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
