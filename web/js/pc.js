@@ -79,6 +79,7 @@
       case 'rotPic': SS.rotatePic(90); break;
       case 'picBottom': SS.picTop(false); break;
       case 'patch': patchModal(); break;
+      case 'split': SS.renderSplitSheet(); break;
       case 'selectAll': SS.selectAll(); layerSig = ''; renderLayers(); break;
       case 'showall': SS.setSolo(null); layerSig = ''; renderLayers(); break;
       case 'solo': { const o2 = SS.sel(); if (o2) { SS.setSolo(o2.id); layerSig = ''; renderLayers(); } break; }

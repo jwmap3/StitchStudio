@@ -1679,23 +1679,91 @@
     toast('Downloaded ' + name);
   }
   const safeName = () => (doc.name || 'design').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'design';
+  // The Topaz holds long hoops (Royal, Crown…) with the long side running front-to-back, so a
+  // wide design has to go in sideways: turn it 90° so the top of the design points LEFT.
+  // fullB = the whole design's bounds (so every part of a split design turns the same way, around the same centre)
+  function machineOut(d, fullB) {
+    const hd = hoopDef(), longS = Math.max(hd.w, hd.h), shortS = Math.min(hd.w, hd.h);
+    const bw = fullB[2] - fullB[0], bh = fullB[3] - fullB[1];
+    if (!(doc.machineTurn !== 'off' && longS > shortS + 1 && bw > bh && bw > shortS + 0.5 && bh <= shortS + 0.5)) return { out: d, turned: false, hd };
+    const cx = (fullB[0] + fullB[2]) / 2, cy = (fullB[1] + fullB[3]) / 2;
+    const rot = q => ({ x: cx + (q.y - cy), y: cy - (q.x - cx), c: q.c });
+    const st = d.stitches.map(rot);
+    let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity;
+    if (d.__part) { const r1 = rot({ x: fullB[0], y: fullB[1] }), r2 = rot({ x: fullB[2], y: fullB[3] }); a = Math.min(r1.x, r2.x); c = Math.max(r1.x, r2.x); b = Math.min(r1.y, r2.y); e = Math.max(r1.y, r2.y); }
+    else st.forEach(q => { if (q.c === 0) { a = Math.min(a, q.x); b = Math.min(b, q.y); c = Math.max(c, q.x); e = Math.max(e, q.y); } });
+    return { out: Object.assign({}, d, { stitches: st, bounds: [a, b, c, e] }), turned: true, hd };
+  }
+
+  // ---------------- split one design into several machine files that line up perfectly
+  // Each part carries two jump-only "corner" moves at the whole design's corners, so every file has the
+  // same size and centre: the machine places them identically and the parts register on the fabric
+  // without re-hooping or nudging. Jumps don't sew.
+  let splitCfg = { mode: 'count', max: 12000 };
+  function splitDesign(d, mode, max) {
+    const st = d.stitches, parts = [];
+    let cur = null, ci = -1, n = 0;
+    const open = () => { cur = { stitches: [], colors: [d.colors[Math.max(0, ci)]], count: 0, trims: 0 }; n = 0; };
+    const close = () => { if (cur && cur.count) { cur.stitches.push({ x: cur.stitches[cur.stitches.length - 1].x, y: cur.stitches[cur.stitches.length - 1].y, c: 4 }); parts.push(cur); } cur = null; };
+    ci = 0; open();
+    for (let i = 0; i < st.length; i++) {
+      const s2 = st[i];
+      if (s2.c === 4) break;
+      if (s2.c === 3) {   // colour change
+        ci++;
+        if (mode === 'colour' || (mode === 'count' && n >= max * 0.6)) { close(); open(); continue; }
+        if (cur.count) { cur.stitches.push(s2); cur.colors.push(d.colors[ci]); } else cur.colors = [d.colors[ci]];
+        continue;
+      }
+      cur.stitches.push(s2);
+      if (s2.c === 0) { cur.count++; n++; }
+      if (s2.c === 2) { cur.trims++; if (mode === 'count' && n >= max) { close(); open(); } }
+    }
+    close();
+    return parts;
+  }
+  function partDesign(d, p) {
+    const B = d.bounds;
+    const lead = [{ x: B[0], y: B[1], c: 1 }, { x: B[2], y: B[3], c: 1 }];
+    return { stitches: lead.concat(p.stitches), colors: p.colors, count: p.count, trims: p.trims, bounds: B.slice(), __part: true };
+  }
+  function exportPart(kind, i, list, d) {
+    const p = list[i], { out } = machineOut(partDesign(d, p), d.bounds);
+    const bytes = kind === 'vp3' ? S.writeVP3(out) : S.writeDST(out, doc.name + ' ' + (i + 1));
+    saveBytes(`${safeName()}_part${i + 1}of${list.length}.${kind}`, bytes, 'application/octet-stream');
+  }
+  function renderSplitSheet() {
+    const d = design();
+    if (!d.count) { toast('Nothing to split yet'); return; }
+    const list = splitDesign(d, splitCfg.mode, splitCfg.max);
+    const mins = p => Math.max(1, Math.round(p.count / 600 + p.trims * 0.1 + p.colors.length * 0.5));
+    const parts = [`<div class="sec"><h3>Split into parts</h3>
+      <p class="small" style="margin:0 0 8px">Sew a big design in smaller files, one after another, without moving the hoop. Every part is saved at the same size and centre, so they line up exactly. Easier on the machine, and if something goes wrong you only redo that part.</p>
+      <div class="row"><label>Split by</label><div class="toggle" id="spMode"><button data-v="count" class="${splitCfg.mode === 'count' ? 'on' : ''}">Stitch count</button><button data-v="colour" class="${splitCfg.mode === 'colour' ? 'on' : ''}">Each colour</button></div></div>`];
+    if (splitCfg.mode === 'count') parts.push(`<div class="row"><label>Max per part</label><div class="toggle" id="spMax">${[[6000, '6k'], [10000, '10k'], [12000, '12k'], [15000, '15k'], [20000, '20k']].map(([v, l]) => `<button data-v="${v}" class="${splitCfg.max === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <p class="small" style="margin:0 0 6px">Parts end at a thread change or a trim, never in the middle of a run.</p>`);
+    parts.push(`</div><div class="sec"><h3>${list.length} part${list.length > 1 ? 's' : ''} · ${d.count.toLocaleString()} stitches total</h3>`);
+    list.forEach((p, i) => parts.push(`<div class="layer" style="cursor:default"><span class="nm"><b>Part ${i + 1}</b> · ${p.count.toLocaleString()} st · ~${mins(p)} min<br><span class="swatches" style="margin-top:4px">${p.colors.map(c => `<span class="sw" style="background:${c.color};width:18px;height:18px" title="${threadName(c.color)}"></span>`).join('')}</span></span>
+      <button class="btn sm primary" data-pv="${i}">VP3</button><button class="btn sm" data-pd="${i}">DST</button></div>`));
+    parts.push(`<div class="btns" style="margin-top:10px">${btn('spAll', `⬇ Save all ${list.length} as VP3`, 'primary')}${btn('spClose', 'Close')}</div>
+      <p class="small" style="margin:8px 0 0">At the machine: hoop once, sew Part 1, then load Part 2 and press start — don't move the hoop or the fabric between parts.</p></div>`);
+    mount(parts);
+    const tg = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderSplitSheet(); })); };
+    tg('spMode', v => splitCfg.mode = v);
+    tg('spMax', v => splitCfg.max = +v);
+    sheet.querySelectorAll('[data-pv]').forEach(b2 => b2.addEventListener('click', () => exportPart('vp3', +b2.dataset.pv, list, d)));
+    sheet.querySelectorAll('[data-pd]').forEach(b2 => b2.addEventListener('click', () => exportPart('dst', +b2.dataset.pd, list, d)));
+    on('spAll', () => { list.forEach((_, i) => setTimeout(() => exportPart('vp3', i, list, d), i * 700)); });
+    on('spClose', () => renderSheet());
+  }
+
   function exportFile(kind) {
     const d = design();
     if (!d.count) { toast('Nothing to export yet'); return; }
     const fi = fitInfo(d);
     if (fi && !fi.machine && !confirm('This design is bigger than the Topaz 30 can stitch (14.17 × 7.87 in). Export anyway?')) return;
     if (fi && fi.machine && !fi.fits && !fi.fitsRot) toast('Heads up: the design is bigger than the ' + hoopDef().name + ' hoop');
-    // The Topaz holds long hoops (Royal, Crown…) with the long side running front-to-back, so a
-    // wide design has to go in sideways: turn it 90° so the top of the design points LEFT.
-    let out = d, turned = false;
-    const hd = hoopDef(), longS = Math.max(hd.w, hd.h), shortS = Math.min(hd.w, hd.h);
-    const bw = d.bounds[2] - d.bounds[0], bh = d.bounds[3] - d.bounds[1];
-    if (doc.machineTurn !== 'off' && longS > shortS + 1 && bw > bh && bw > shortS + 0.5 && bh <= shortS + 0.5) {
-      const cx = (d.bounds[0] + d.bounds[2]) / 2, cy = (d.bounds[1] + d.bounds[3]) / 2;
-      const st = d.stitches.map(q => ({ x: cx + (q.y - cy), y: cy - (q.x - cx), c: q.c }));
-      let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; st.forEach(q => { if (q.c === 0) { a = Math.min(a, q.x); b = Math.min(b, q.y); c = Math.max(c, q.x); e = Math.max(e, q.y); } });
-      out = Object.assign({}, d, { stitches: st, bounds: [a, b, c, e] }); turned = true;
-    }
+    const { out, turned, hd } = machineOut(d, d.bounds);
     const bytes = kind === 'vp3' ? S.writeVP3(out) : S.writeDST(out, doc.name);
     saveBytes(safeName() + '.' + kind, bytes, 'application/octet-stream');
     if (turned) setTimeout(() => toast(`Saved turned 90° for the ${hd.name} hoop: the top of the design points LEFT on the machine — hoop the garment with its top (collar) to the left`), 2700);
@@ -2454,9 +2522,9 @@
       `${(() => { const fi = fitInfo(d); return fi ? `<p class="small" style="margin:0 0 8px;color:${fi.fits || fi.fitsRot ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Fits the ' + hoopDef().name + ' hoop' : fi.fitsRot ? '⟳ Fits the ' + hoopDef().name + ' hoop if rotated' : fi.machine ? '✗ Too big for the ' + hoopDef().name + ' hoop — pick a bigger hoop' : '✗ Bigger than the Topaz 30 can stitch (14.17 × 7.87 in)'}</p>` : ''; })()}<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
       `<div class="swatches" style="margin-top:10px">${d.colors.map((c, i) => `<span class="sw" title="${i + 1}" style="background:${c.color}"></span>`).join('')}</div>`,
       `<h3 style="margin-top:14px">Fabric</h3><div class="swatches" id="fabSw">${FABRICS.map(([c, n]) => `<button class="sw ${c === (doc.fabric || '#e9e7e1') ? 'on' : ''}" data-f="${c}" style="background:${c}" aria-label="${n}" title="${n}"></button>`).join('')}</div>`,
-      `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}</div></div>`];
+      `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}${btn('xSplit', '✂ Split into parts…')}</div></div>`];
     mount(parts);
-    on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst'));
+    on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst')); on('xSplit', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderSplitSheet(); });
     sheet.querySelectorAll('[data-f]').forEach(b2 => b2.addEventListener('click', () => { doc.fabric = b2.dataset.f; autosave(); renderSheet(); draw(); }));
   }
 
@@ -2635,7 +2703,7 @@
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
-    selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    renderSplitSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
