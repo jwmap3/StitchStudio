@@ -419,6 +419,8 @@
   }
   function drawBgSel() {
     drawPersp();
+    if (mhOverlay) { ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([8, 5]); ctx.fillStyle = '#4cc2ff'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center';
+      mhOverlay.forEach((c, k) => { const [x, y] = toPX([c[0], c[1]]), [x2, y2] = toPX([c[2], c[3]]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.fillText(String(k + 1), (x + x2) / 2, (y + y2) / 2); }); ctx.restore(); }
     if (!bgSel || !doc.bg || tool !== 'select') return;
     const b = doc.bg, [x, y] = toPX([b.x, b.y]), [x2, y2] = toPX([b.x + b.w, b.y + b.h]);
     ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.setLineDash([]);
@@ -1757,6 +1759,117 @@
     on('spClose', () => renderSheet());
   }
 
+  // ---------------- MULTI-HOOP: break a big design into tiles that each fit a smaller hoop
+  // Each tile is its own VP3, centred on its tile, with a small overlap so there are no gaps, and
+  // (optionally) alignment crosses sewn first at the tile corners. Neighbouring tiles share corners,
+  // so after re-hooping you line the needle up with a cross the previous tile already sewed.
+  let mhOverlay = null;
+  let mhCfg = { hoop: 'splendid', overlap: 2, marks: true, order: 'center' };
+  function multiHoopPlan(d, cfg) {
+    const H = HOOPS.find(h => h.id === cfg.hoop) || HOOPS[0];
+    const SAFE = 10;   // keep away from the hoop edge (long satin stitches can reach past a split line)
+    const B = d.bounds, W = B[2] - B[0], Ht = B[3] - B[1];
+    const plan = (cw, ch) => { const nx = Math.max(1, Math.ceil(W / cw)), ny = Math.max(1, Math.ceil(Ht / ch)); return { nx, ny, cw: W / nx, ch: Ht / ny, n: nx * ny }; };
+    // the hoop can go either way round on the fabric: use whichever needs fewer hoopings
+    const a = plan(H.w - 2 * SAFE, H.h - 2 * SAFE), b = plan(H.h - 2 * SAFE, H.w - 2 * SAFE);
+    const P = a.n <= b.n ? a : b;
+    const tiles = [];
+    for (let j = 0; j < P.ny; j++) for (let i = 0; i < P.nx; i++) {
+      const x0 = B[0] + i * P.cw, y0 = B[1] + j * P.ch;
+      tiles.push({ i, j, core: [x0, y0, x0 + P.cw, y0 + P.ch] });
+    }
+    // which tile each stitch belongs to (by the middle of the stitch), plus a little overlap
+    const ov = (cfg.overlap || 0) / 2;
+    const inT = (t, m) => m[0] >= t.core[0] - ov && m[0] <= t.core[2] + ov && m[1] >= t.core[1] - ov && m[1] <= t.core[3] + ov;
+    tiles.forEach(t => { t.runs = []; t._cur = null; });
+    let ci = 0, prev = null;
+    for (const q of d.stitches) {
+      if (q.c === 4) break;
+      if (q.c === 3) { ci++; prev = null; tiles.forEach(t => t._cur = null); continue; }
+      if (q.c !== 0) { prev = null; tiles.forEach(t => t._cur = null); continue; }
+      if (prev) {
+        const m = [(prev.x + q.x) / 2, (prev.y + q.y) / 2];
+        for (const t of tiles) {
+          if (inT(t, m)) {
+            if (!t._cur || t._cur.ci !== ci) { t._cur = { ci, pts: [[prev.x, prev.y]] }; t.runs.push(t._cur); }
+            t._cur.pts.push([q.x, q.y]);
+          } else t._cur = null;
+        }
+      }
+      prev = q;
+    }
+    const cx = (B[0] + B[2]) / 2, cy = (B[1] + B[3]) / 2;
+    let live = tiles.filter(t => t.runs.length);
+    if (cfg.order === 'center') live.sort((p, q) => Math.hypot((p.core[0] + p.core[2]) / 2 - cx, (p.core[1] + p.core[3]) / 2 - cy) - Math.hypot((q.core[0] + q.core[2]) / 2 - cx, (q.core[1] + q.core[3]) / 2 - cy));
+    else live.sort((p, q) => p.j - q.j || p.i - q.i);
+    return { H, tiles: live, nx: P.nx, ny: P.ny, cw: P.cw, ch: P.ch, safe: SAFE };
+  }
+  function tileDesign(d, t, cfg, plan) {
+    const objs = [];
+    if (cfg.marks) {
+      // alignment crosses at the tile's corners (shared with neighbours), inset a touch, sewn first
+      const lines = [], A = 3, c = t.core;
+      [[c[0], c[1]], [c[2], c[1]], [c[2], c[3]], [c[0], c[3]]].forEach(([x, y]) => { lines.push([[x - A, y], [x + A, y]]); lines.push([[x, y - A], [x, y + A]]); });
+      objs.push({ id: 'mark', type: 'stitches', lines: lines.map(l => S.resamplePolyline(l, 1.5, false)), color: '#bdbdbd', threadName: 'Alignment marks (temporary)' });
+    }
+    // drop the original lock stitches at run ends (the rebuild adds fresh ones)
+    const strip = pts => { const L = (a2, b2) => Math.hypot(a2[0] - b2[0], a2[1] - b2[1]); let i0 = 0, i1 = pts.length - 1; while (i0 < i1 - 1 && L(pts[i0], pts[i0 + 1]) < 0.4) i0++; while (i1 > i0 + 1 && L(pts[i1], pts[i1 - 1]) < 0.4) i1--; return pts.slice(i0, i1 + 1); };
+    // group consecutive runs of the same colour into one layer, keeping sew order
+    let cur = null;
+    t.runs.forEach(r0 => {
+      const r = { ci: r0.ci, pts: strip(r0.pts) }; if (r.pts.length < 2) return;
+      if (!cur || cur.ci !== r.ci) { cur = { ci: r.ci, id: 'c' + objs.length, type: 'stitches', lines: [], color: (d.colors[r.ci] || {}).color || '#000000', threadName: (d.colors[r.ci] || {}).name || '' }; objs.push(cur); }
+      cur.lines.push(r.pts);
+    });
+    const built = S.build(objs, { knockout: false });
+    // centre the file on the tile itself (corner jumps make the file symmetric around the tile centre)
+    const tx = (t.core[0] + t.core[2]) / 2, ty = (t.core[1] + t.core[3]) / 2;
+    let hx = (t.core[2] - t.core[0]) / 2 + 3, hy = (t.core[3] - t.core[1]) / 2 + 3;
+    built.stitches.forEach(q => { if (q.c === 0) { hx = Math.max(hx, Math.abs(q.x - tx)); hy = Math.max(hy, Math.abs(q.y - ty)); } });
+    const fb = [tx - hx, ty - hy, tx + hx, ty + hy];
+    let out = { stitches: [{ x: fb[0], y: fb[1], c: 1 }, { x: fb[2], y: fb[3], c: 1 }].concat(built.stitches), colors: built.colors, count: built.count, trims: built.trims, bounds: fb };
+    // turn it to suit how the hoop sits on the machine (long side front-to-back)
+    const H = plan.H, longS = Math.max(H.w, H.h), shortS = Math.min(H.w, H.h), w = fb[2] - fb[0], h = fb[3] - fb[1];
+    let turned = false;
+    if (longS > shortS + 1 && w > shortS + 0.5 && h <= shortS + 0.5) {
+      const rot = q => ({ x: tx + (q.y - ty), y: ty - (q.x - tx), c: q.c });
+      out = Object.assign({}, out, { stitches: out.stitches.map(rot), bounds: [tx - hy, ty - hx, tx + hy, ty + hx] }); turned = true;
+    }
+    return { out, turned, fits: Math.max(w, h) <= longS + 0.5 && Math.min(w, h) <= shortS + 0.5 };
+  }
+  function renderMultiHoopSheet() {
+    const d = design();
+    if (!d.count) { toast('Nothing to split yet'); return; }
+    const P = multiHoopPlan(d, mhCfg);
+    const files = P.tiles.map(t => tileDesign(d, t, mhCfg, P));
+    mhOverlay = P.tiles.map(t => t.core); draw();
+    const name = (t, k) => String.fromCharCode(65 + t.j) + (t.i + 1);
+    const opts = HOOPS.filter(h => h.id !== 'custom' && Math.max(h.w, h.h) < 360);
+    const parts = [`<div class="sec"><h3>Multi-hoop: smaller hoops</h3>
+      <p class="small" style="margin:0 0 8px">Break the design into pieces that each fit a smaller hoop. Smaller hoops hold the fabric tighter and flatter, so the stitching is more precise, and each piece is short and easy on the machine.</p>
+      <div class="row"><label>Hoop</label><div class="toggle" id="mhH">${opts.map(h => `<button data-v="${h.id}" class="${mhCfg.hoop === h.id ? 'on' : ''}">${h.name} ${inch(h.w)}×${inch(h.h)}</button>`).join('')}</div></div>
+      <div class="row"><label>Overlap</label><div class="toggle" id="mhO">${[[0, 'None'], [1, '1 mm'], [2, '2 mm'], [3, '3 mm']].map(([v, l]) => `<button data-v="${v}" class="${mhCfg.overlap === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="row"><label>Alignment marks</label><div class="toggle" id="mhM"><button data-v="1" class="${mhCfg.marks ? 'on' : ''}">On</button><button data-v="0" class="${!mhCfg.marks ? 'on' : ''}">Off</button></div></div>
+      <div class="row"><label>Order</label><div class="toggle" id="mhR"><button data-v="center" class="${mhCfg.order === 'center' ? 'on' : ''}">Centre out</button><button data-v="rows" class="${mhCfg.order === 'rows' ? 'on' : ''}">Row by row</button></div></div>
+      </div><div class="sec"><h3>${files.length} hooping${files.length > 1 ? 's' : ''} · ${P.nx} × ${P.ny} grid · pieces ${inch(P.cw)} × ${inch(P.ch)} in</h3>`];
+    // small map of the grid
+    const B = d.bounds, sc = 260 / Math.max(B[2] - B[0], B[3] - B[1]);
+    parts.push(`<svg viewBox="0 0 ${(B[2] - B[0]) * sc + 4} ${(B[3] - B[1]) * sc + 4}" style="width:100%;max-width:300px;background:#1c2541;border-radius:8px;margin:0 0 8px">${P.tiles.map((t, k) => `<g><rect x="${(t.core[0] - B[0]) * sc + 2}" y="${(t.core[1] - B[1]) * sc + 2}" width="${(t.core[2] - t.core[0]) * sc}" height="${(t.core[3] - t.core[1]) * sc}" fill="rgba(76,194,255,.12)" stroke="#4cc2ff" stroke-width="1"/><text x="${((t.core[0] + t.core[2]) / 2 - B[0]) * sc + 2}" y="${((t.core[1] + t.core[3]) / 2 - B[1]) * sc + 6}" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">${k + 1}</text></g>`).join('')}</svg>`);
+    files.forEach((f, k) => {
+      const t = P.tiles[k];
+      parts.push(`<div class="layer" style="cursor:default"><span class="nm"><b>Hooping ${k + 1}</b> (${name(t)}) · ${f.out.count.toLocaleString()} st · ${f.out.colors.length} colour${f.out.colors.length > 1 ? 's' : ''}${f.fits ? '' : ' · <span style="color:#ff8a8d">too big!</span>'}${f.turned ? ' · turned' : ''}</span><button class="btn sm primary" data-mh="${k}">VP3</button></div>`);
+    });
+    parts.push(`<div class="btns" style="margin-top:10px">${btn('mhAll', `⬇ Save all ${files.length}`, 'primary')}${btn('mhClose', 'Close')}</div>
+      <p class="small" style="margin:8px 0 0"><b>At the machine:</b> 1) Hoop the area for Hooping 1 and sew it. 2) Re-hoop over the next area. 3) Load the next file; it starts with gray alignment crosses — step to the first cross and use the design-move arrows until the needle lands exactly on the cross already sewn, then sew. 4) Repeat. Pull out any gray crosses left showing at the end.${files.some(f => f.turned) ? ' Turned files: the top of the design points LEFT in the hoop.' : ''}</p></div>`);
+    mount(parts);
+    const tg = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { fn(b2.dataset.v); renderMultiHoopSheet(); })); };
+    tg('mhH', v => mhCfg.hoop = v); tg('mhO', v => mhCfg.overlap = +v); tg('mhM', v => mhCfg.marks = v === '1'); tg('mhR', v => mhCfg.order = v);
+    const save = k => { const f = files[k], t = P.tiles[k]; saveBytes(`${safeName()}_hoop${k + 1}of${files.length}_${name(t)}.vp3`, S.writeVP3(f.out), 'application/octet-stream'); };
+    sheet.querySelectorAll('[data-mh]').forEach(b2 => b2.addEventListener('click', () => save(+b2.dataset.mh)));
+    on('mhAll', () => files.forEach((_, k) => setTimeout(() => save(k), k * 700)));
+    on('mhClose', () => renderSheet());
+  }
+
   function exportFile(kind) {
     const d = design();
     if (!d.count) { toast('Nothing to export yet'); return; }
@@ -1824,7 +1937,7 @@
 
   // ---------------- bottom sheet per context
   function renderSheet() {
-    hint('');
+    hint(''); if (mhOverlay) { mhOverlay = null; draw(); }
     if (preview) return renderPreviewSheet();
     if (tool === 'fill' || tool === 'satin' || tool === 'run') return renderDrawSheet();
     if (tool === 'brush') return renderBrushSheet();
@@ -2522,9 +2635,9 @@
       `${(() => { const fi = fitInfo(d); return fi ? `<p class="small" style="margin:0 0 8px;color:${fi.fits || fi.fitsRot ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Fits the ' + hoopDef().name + ' hoop' : fi.fitsRot ? '⟳ Fits the ' + hoopDef().name + ' hoop if rotated' : fi.machine ? '✗ Too big for the ' + hoopDef().name + ' hoop — pick a bigger hoop' : '✗ Bigger than the Topaz 30 can stitch (14.17 × 7.87 in)'}</p>` : ''; })()}<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
       `<div class="swatches" style="margin-top:10px">${d.colors.map((c, i) => `<span class="sw" title="${i + 1}" style="background:${c.color}"></span>`).join('')}</div>`,
       `<h3 style="margin-top:14px">Fabric</h3><div class="swatches" id="fabSw">${FABRICS.map(([c, n]) => `<button class="sw ${c === (doc.fabric || '#e9e7e1') ? 'on' : ''}" data-f="${c}" style="background:${c}" aria-label="${n}" title="${n}"></button>`).join('')}</div>`,
-      `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}${btn('xSplit', '✂ Split into parts…')}</div></div>`];
+      `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}${btn('xSplit', '✂ Split into parts…')}${btn('xMH', '▦ Multi-hoop (smaller hoops)…')}</div></div>`];
     mount(parts);
-    on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst')); on('xSplit', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderSplitSheet(); });
+    on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst')); on('xSplit', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderSplitSheet(); }); on('xMH', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderMultiHoopSheet(); });
     sheet.querySelectorAll('[data-f]').forEach(b2 => b2.addEventListener('click', () => { doc.fabric = b2.dataset.f; autosave(); renderSheet(); draw(); }));
   }
 
@@ -2703,7 +2816,7 @@
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
-    renderSplitSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
