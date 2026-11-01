@@ -141,14 +141,24 @@
     const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers', s: 'stream' };
     const t = tools[k.toLowerCase()]; if (t) { document.querySelector(`#tools [data-tool=${t}]`).click(); return; }
     if (k.toLowerCase() === 'r') run('real');
-    if (k.toLowerCase() === 'p') run('preview');
+    if (k.toLowerCase() === 'p') { if (!e.repeat && !SS.orderMode()) { pDown = true; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
     if (k.toLowerCase() === 'g') run('sim');
     if (k.toLowerCase() === 'h') run('pic');
     if (k.toLowerCase() === 'm') run('patch');
     if (k.toLowerCase() === 'o') run('outline');
   });
   let nudgeT = 0;
-  window.addEventListener('keyup', e => { if (e.key === ' ') spaceDown = false; });
+  let pDown = false;
+  window.addEventListener('keyup', e => {
+    if (e.key === ' ') spaceDown = false;
+    if (e.key.toLowerCase() === 'p' && pDown) {
+      pDown = false;
+      const n = SS.orderList().length;
+      SS.setOrderMode(false); layerSig = ''; renderLayers();
+      if (n === 0) run('preview');   // a quick tap of P still toggles the preview
+    }
+  });
+  window.addEventListener('blur', () => { if (pDown) { pDown = false; SS.setOrderMode(false); layerSig = ''; renderLayers(); } });
 
   // ---------------- pan with space-drag or middle mouse (captured before the editor sees it)
   const stage = $('#stage'); let panning = null;
@@ -246,15 +256,15 @@
   // ---------------- layers panel (always visible), drag to reorder
   let layerSig = '', dragFrom = null;
   function renderLayers() {
-    const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds(), so = SS.solo();
-    const sig = so + '|' + mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
+    const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds(), so = SS.solo(), ol = SS.orderMode() ? SS.orderList() : [];
+    const sig = ol.join(',') + '#' + so + '|' + mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
     if (sig === layerSig) return; layerSig = sig;
     const box = $('#pcLayers');
     if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
     box.innerHTML = d.objects.map((o, i) => {
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
       return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || (so != null && so !== o.id) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
-        <span class="num">${i + 1}</span><span class="dot" style="background:${dot}"></span>
+        <span class="num" ${ol.includes(o.id) ? 'style="background:#f2b134;color:#16181d;border-radius:999px;font-weight:700"' : ''}>${ol.includes(o.id) ? '#' + (ol.indexOf(o.id) + 1) : i + 1}</span><span class="dot" style="background:${dot}"></span>
         <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
     }).join('');
@@ -270,7 +280,7 @@
     }
     box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
-      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
+      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.orderMode()) { SS.orderToggle(o.id); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
       el.addEventListener('contextmenu', e => { e.preventDefault(); SS.setSolo(o.id); layerSig = ''; renderLayers(); SS.toast(SS.solo() === o.id ? 'Showing only “' + (o.name || TYPE[o.type]) + '” — right-click it again (or Show all) to bring the rest back' : 'All layers shown'); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });
       el.addEventListener('dragstart', e => { dragFrom = o; e.dataTransfer.effectAllowed = 'move'; });

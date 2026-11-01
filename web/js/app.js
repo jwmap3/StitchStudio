@@ -78,6 +78,29 @@
   const sel = () => doc.objects.find(o => o.id === selId) || null;
   // Solo: view just one layer (others hidden on screen only — they still save and stitch)
   let solo = null, pickMany = false;
+  // Order mode: click layers in the order they should sew (PC: hold P; phone: Tap order button)
+  let orderMode = false, orderList = [];
+  function setOrderMode(on) {
+    if (on) { orderMode = true; orderList = []; hint('Click layers in the order they should sew — first to last'); draw(); return; }
+    const list = orderList.slice(); orderMode = false; orderList = []; hint('');
+    if (list.length >= 2) applyOrder(list); else { draw(); if (list.length === 1) toast('Pick at least 2 layers to set an order'); }
+  }
+  function orderToggle(id) {
+    if (!orderMode) return;
+    const k = orderList.indexOf(id);
+    if (k >= 0) orderList.splice(k, 1); else orderList.push(id);
+    hint(orderList.length ? `Sew order: ${orderList.map((x, i) => (i + 1) + ' ' + ((doc.objects.find(o => o.id === x) || {}).name || '')).join(' → ')}` : 'Click layers in the order they should sew — first to last');
+    draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { }
+  }
+  // the picked layers keep the slots they already used, filled in the order you clicked them
+  function applyOrder(list) {
+    const objs = list.map(id => doc.objects.find(o => o.id === id)).filter(Boolean);
+    const slots = objs.map(o => doc.objects.indexOf(o)).sort((a, b) => a - b);
+    const next = doc.objects.slice();
+    slots.forEach((slot, i) => { next[slot] = objs[i]; });
+    doc.objects = next; commit(); renderSheet(); draw();
+    toast(`Sew order set for ${objs.length} layers: ${objs.map(o => o.name || o.type).slice(0, 4).join(' → ')}${objs.length > 4 ? ' …' : ''}`);
+  }
   const inView = o => solo == null || o.id === solo;
   function setSolo(id) {
     solo = (id == null || solo === id) ? null : id;
@@ -417,8 +440,20 @@
     P.forEach((q, i) => { ctx.beginPath(); ctx.arc(q[0], q[1], 11, 0, 7); ctx.fillStyle = '#4cc2ff'; ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = '#16181d'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(['1', '2', '3', '4'][i], q[0], q[1]); });
     ctx.restore();
   }
+  function drawOrder() {
+    if (!orderMode) return;
+    ctx.save(); ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    orderList.forEach((id, i) => {
+      const o = doc.objects.find(x => x.id === id), bb = o && bbox(o); if (!bb) return;
+      const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]);
+      ctx.strokeStyle = '#f2b134'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(a - 3, b - 3, c - a + 6, d - b + 6); ctx.setLineDash([]);
+      const cx = (a + c) / 2, cy = (b + d) / 2;
+      ctx.fillStyle = '#f2b134'; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, 7); ctx.fill(); ctx.fillStyle = '#16181d'; ctx.fillText(String(i + 1), cx, cy + 1);
+    });
+    ctx.restore();
+  }
   function drawBgSel() {
-    drawPersp();
+    drawPersp(); drawOrder();
     if (mhOverlay) { ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([8, 5]); ctx.fillStyle = '#4cc2ff'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center';
       mhOverlay.forEach((c, k) => { const [x, y] = toPX([c[0], c[1]]), [x2, y2] = toPX([c[2], c[3]]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.fillText(String(k + 1), (x + x2) / 2, (y + y2) / 2); }); ctx.restore(); }
     if (!bgSel || !doc.bg || tool !== 'select') return;
@@ -799,6 +834,7 @@
     }
     const p = toMM(e.offsetX, e.offsetY);
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
+    if (orderMode && !preview) { const h = hitObject(p); gesture = null; if (h) orderToggle(h.id); return; }
     if (persp && !preview) { const k = persp.pts.findIndex(q => { const [x, y] = toPX(q); return Math.hypot(x - e.offsetX, y - e.offsetY) < 24; }); if (k >= 0) { gesture.type = 'perspnode'; gesture.k = k; return; } }
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
@@ -2594,7 +2630,7 @@
 
   function renderLayers() {
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
-    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
+    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lOrder', orderMode ? `✓ Done (${orderList.length})` : '🔢 Tap order', orderMode ? 'primary' : '')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
     doc.objects.forEach((o, i) => {
       const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
@@ -2607,6 +2643,7 @@
     parts.push('</div>');
     mount(parts);
     on('lSelAll', () => { pickMany = false; selectAll(); });
+    on('lOrder', () => { if (!orderMode) { setOrderMode(true); renderLayers(); toast('Tap layers on the design (or in this list) in the order they should sew'); } else { setOrderMode(false); renderLayers(); } });
     on('lPickMany', () => {
       if (!pickMany) { pickMany = true; multi.clear(); renderLayers(); return; }
       pickMany = false;
@@ -2619,6 +2656,7 @@
       const o = doc.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => {
         const a = e.target.closest('button'); if (a) { e.stopPropagation(); if (a.dataset.a === 'up') move(o, -1); else if (a.dataset.a === 'down') move(o, 1); else { o.hidden = !o.hidden; commit(); renderSheet(); draw(); } return; }
+        if (orderMode) { orderToggle(o.id); renderLayers(); return; }
         if (pickMany) { if (multi.has(o.id)) multi.delete(o.id); else multi.add(o.id); renderLayers(); draw(); return; }
         selId = o.id; bgSel = false; selNode = -1; setTool('select', true);
       });
@@ -2816,7 +2854,7 @@
     toggleMulti, multiIds: () => multi.size > 1 ? [...multi] : (selId != null ? [selId] : []), clearMulti() { multi.clear(); draw(); },
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
-    renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setOrderMode, orderToggle, orderMode: () => orderMode, orderList: () => orderList.slice(), renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },
