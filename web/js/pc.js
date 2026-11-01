@@ -138,10 +138,11 @@
     if (k === '?') { keysModal(); return; }
     if (k.startsWith('Arrow')) { const o = selObj(); if (!o) return; e.preventDefault(); const st = e.shiftKey ? 1 : 0.1; SS.translate(o, k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0); SS.draw(); clearTimeout(nudgeT); nudgeT = setTimeout(() => SS.commit(), 500); return; }
     if (k === 'Enter' && SS.hasDraft && SS.hasDraft()) { e.preventDefault(); SS.finishDraft(); return; }
+    if (k.toLowerCase() === 'v') { if (!e.repeat && !SS.orderMode()) { pDown = true; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
     const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers', s: 'stream' };
     const t = tools[k.toLowerCase()]; if (t) { document.querySelector(`#tools [data-tool=${t}]`).click(); return; }
     if (k.toLowerCase() === 'r') run('real');
-    if (k.toLowerCase() === 'p') { if (!e.repeat && !SS.orderMode()) { pDown = true; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
+    if (k.toLowerCase() === 'p') run('preview');
     if (k.toLowerCase() === 'g') run('sim');
     if (k.toLowerCase() === 'h') run('pic');
     if (k.toLowerCase() === 'm') run('patch');
@@ -151,11 +152,11 @@
   let pDown = false;
   window.addEventListener('keyup', e => {
     if (e.key === ' ') spaceDown = false;
-    if (e.key.toLowerCase() === 'p' && pDown) {
+    if (e.key.toLowerCase() === 'v' && pDown) {
       pDown = false;
       const n = SS.orderList().length;
       SS.setOrderMode(false); layerSig = ''; renderLayers();
-      if (n === 0) run('preview');   // a quick tap of P still toggles the preview
+      if (n === 0) document.querySelector('#tools [data-tool=select]').click();   // a quick tap of V is still the Select tool
     }
   });
   window.addEventListener('blur', () => { if (pDown) { pDown = false; SS.setOrderMode(false); layerSig = ''; renderLayers(); } });
@@ -424,7 +425,7 @@
   function modal(html) { $('#modalBox').innerHTML = html + '<div class="btns" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="mClose">Close</button></div>'; $('#modal').classList.add('open'); $('#mClose').onclick = () => $('#modal').classList.remove('open'); }
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') $('#modal').classList.remove('open'); });
   function keysModal() {
-    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
+    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Hold V + click layers', 'Set sew order: first click sews first (release V to apply)'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
     modal('<h2>Keyboard shortcuts</h2><table>' + K.map(([k, v]) => `<tr><td style="white-space:nowrap"><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>');
   }
   function threadModal() {
