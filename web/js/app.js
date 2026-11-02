@@ -845,6 +845,11 @@
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
     if (tool === 'fill' && fillTrace === 'freehand' && !preview) { gesture.type = 'lasso'; stroke = [p]; draw(); return; }
     if (tool === 'select' && !preview && (e.ctrlKey || e.metaKey)) { const h = hitObject(p); gesture = null; if (h) toggleMulti(h.id); return; }
+    // several layers highlighted: drag inside their group box (or on any of them) to move them all together
+    if (tool === 'select' && !preview && multi.size > 1) {
+      const objs = doc.objects.filter(x => multi.has(x.id)), gb = groupBox(objs), P = 7 / view.s, h = hitObject(p);
+      if ((h && multi.has(h.id)) || (gb && p[0] >= gb[0] - P && p[0] <= gb[2] + P && p[1] >= gb[1] - P && p[1] <= gb[3] + P)) { gesture.type = 'movemulti'; gesture.last = p; gesture.objs = objs; return; }
+    }
     if (tool === 'select' && !preview && sel()) {
       const o = sel(), bb = bbox(o);
       if (bb) {
@@ -932,6 +937,10 @@
       else { const n = nodeAt(o, gesture.k); const arr = o.type === 'fill' ? o.paths[n.li] : o.points; arr[n.pi][0] = p[0]; arr[n.pi][1] = p[1]; }
       draw(); return;
     }
+    if (gesture.type === 'movemulti') {
+      const ddx = p[0] - gesture.last[0], ddy = p[1] - gesture.last[1]; gesture.last = p;
+      gesture.objs.forEach(o => translate(o, ddx, ddy)); draw(); return;
+    }
     if (gesture.type === 'moveobj') {
       const o = sel(), ddx = p[0] - gesture.last[0], ddy = p[1] - gesture.last[1]; gesture.last = p;
       translate(o, ddx, ddy); draw(); return;
@@ -949,6 +958,7 @@
     const g = gesture; gesture = null;
     if (dragId != null) { dragId = null; dragMode = null; still.key = null; sprite.key = null; draw(); }
     if (g.type === 'moveobj' && !g.moved && isoArm) { isoArm = false; hint(''); isolateAt(sel(), g.p); return; }
+    if (g.type === 'movemulti') { if (g.moved) { commit(); renderSheet(); } else { const hit = hitObject(g.p); if (hit && !multi.has(hit.id)) { multi.clear(); selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'node' || g.type === 'moveobj') { if (g.moved) commit(); else if (g.type === 'moveobj') { const hit = hitObject(g.p); if (hit && (hit.id !== selId || multi.size)) { multi.clear(); selId = hit.id; selNode = -1; renderSheet(); draw(); } } return; }
     if (g.type === 'draftnode') { if (!g.moved) onTap(g.p); return; }
     if (g.type === 'scaleobj') { if (g.moved) { commit(); hint(''); renderSheet(); const so = sel(); if (so && (so.type === 'import' || so.type === 'stitches') && Math.abs((so.scaleK || 1) - 1) > 0.1) toast('Stitches stretched with the resize — tap ✨ Re-stitch at this size to fix the density'); } return; }

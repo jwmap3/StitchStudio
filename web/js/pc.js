@@ -136,7 +136,7 @@
     if (k === '{') { run('first'); return; }
     if (k === '}') { run('last'); return; }
     if (k === '?') { keysModal(); return; }
-    if (k.startsWith('Arrow')) { const o = selObj(); if (!o) return; e.preventDefault(); const st = e.shiftKey ? 1 : 0.1; SS.translate(o, k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0); SS.draw(); clearTimeout(nudgeT); nudgeT = setTimeout(() => SS.commit(), 500); return; }
+    if (k.startsWith('Arrow')) { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); if (!objs.length) return; e.preventDefault(); const st = e.shiftKey ? 1 : 0.1; objs.forEach(o => SS.translate(o, k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0)); SS.draw(); clearTimeout(nudgeT); nudgeT = setTimeout(() => SS.commit(), 500); return; }
     if (k === 'Enter' && SS.hasDraft && SS.hasDraft()) { e.preventDefault(); SS.finishDraft(); return; }
     if (k.toLowerCase() === 'v') { if (!e.repeat && !SS.orderMode()) { pDown = true; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
     const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers', s: 'stream' };
