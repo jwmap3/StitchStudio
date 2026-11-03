@@ -505,6 +505,130 @@
     pieces.push({ pts: top, kind: 'top' });
     return pieces;
   }
+  // ---------- SATIN BORDER along a shape edge, built as rail pairs (lo side, hi side).
+  // Offsets are measured along the outward normal: lo < hi (e.g. lo = -0.3 tucks under the
+  // fill, hi = width sits outside). Corners: the side on the outside of the turn fans round
+  // (or meets in a sharp miter), the side on the inside of the turn is pinned to one point,
+  // so stitches pivot cleanly instead of crossing or shooting out spikes.
+  function simplifyPts(pts, tol, closed) {
+    if (pts.length < 4) return pts.slice();
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+    const st = [[0, pts.length - 1]];
+    while (st.length) {
+      const [a, b] = st.pop(); let bi = -1, bd = tol;
+      const A = pts[a], B = pts[b], dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy);
+      for (let i = a + 1; i < b; i++) {
+        const P = pts[i]; const d = L < 1e-9 ? hyp(P, A) : Math.abs((P[0] - A[0]) * dy - (P[1] - A[1]) * dx) / L;
+        if (d > bd) { bd = d; bi = i; }
+      }
+      if (bi >= 0) { keep[bi] = 1; st.push([a, bi], [bi, b]); }
+    }
+    let out = pts.filter((p, i) => keep[i]);
+    if (closed && out.length > 3 && hyp(out[0], out[out.length - 1]) < 1e-6) out.pop();
+    return out;
+  }
+  S.simplifyPts = simplifyPts;
+  // outward side sign for a loop of a shape (shape = all loops, even-odd)
+  S.edgeSide = function (loop, shape) {
+    const n = loop.length; let k = 0, best = 0;
+    for (let i = 0; i < n; i++) { const d = hyp(loop[i], loop[(i + 1) % n]); if (d > best) { best = d; k = i; } }
+    const a = loop[k], b = loop[(k + 1) % n], L = best || 1, m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L, e = Math.min(0.25, L / 4);
+    return pointIn([m[0] + nx * e, m[1] + ny * e], shape) ? -1 : 1;
+  };
+  // satin across a small narrow shape: one zig-zag per run of single-span rows (few trims)
+  function zigFill(loop, angleDeg, sp, pc) {
+    const a = angleDeg * Math.PI / 180, u = [Math.cos(a), Math.sin(a)], v = [-u[1], u[0]];
+    const V = loop.map(q => q[0] * v[0] + q[1] * v[1]), U = loop.map(q => q[0] * u[0] + q[1] * u[1]);
+    const v0 = Math.min(...V), v1 = Math.max(...V), n = loop.length, chains = [];
+    let cur = null, k = 0;
+    for (let t = v0 + sp / 2; t < v1; t += sp / 2) {
+      const xs = [];
+      for (let i = 0; i < n; i++) { const j = (i + 1) % n, A = V[i], B = V[j]; if ((A <= t) !== (B <= t)) xs.push(U[i] + (U[j] - U[i]) * (t - A) / (B - A)); }
+      xs.sort((p, q) => p - q);
+      if (xs.length !== 2 || xs[1] - xs[0] < 0.15) { if (cur && cur.length > 1) chains.push(cur); cur = null; continue; }
+      const lo = xs[0] - pc, hi = xs[1] + pc, P = s => [u[0] * s + v[0] * t, u[1] * s + v[1] * t];
+      if (!cur) { cur = []; k = 0; }
+      cur.push(P(k % 2 ? hi : lo)); k++;
+    }
+    if (cur && cur.length > 1) chains.push(cur);
+    return chains;
+  }
+  S.zigFill = (l, a, sp, pc) => zigFill(l, a, sp, pc);
+  S.edgePairs = function (loop0, o) {
+    const closed = !o.open, side = o.side || 1;
+    const lo = o.lo, hi = o.hi, corners = o.corners || 'round';
+    // clean: drop near-duplicates, straighten pixel staircase, keep real corners
+    let L = [];
+    loop0.forEach(p => { if (!L.length || hyp(L[L.length - 1], p) > 0.08) L.push([p[0], p[1]]); });
+    if (closed && L.length > 2 && hyp(L[0], L[L.length - 1]) < 0.08) L.pop();
+    L = closed ? simplifyPts(L.concat([L[0]]), o.tol || 0.09, true) : simplifyPts(L, o.tol || 0.09, false);
+    const n = L.length;
+    if (n < (closed ? 3 : 2)) return [];
+    const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
+    const nrmOf = d => [-d[1] * side, d[0] * side];
+    const P = (v, nn, h) => [v[0] + nn[0] * h, v[1] + nn[1] * h];
+    const pairs = [];
+    const push = (a, b) => pairs.push([a, b]);
+    const segLen = i => hyp(L[i], L[(i + 1) % n]);
+    for (let i = 0; i < n; i++) {
+      const v = L[i];
+      if (!closed && (i === 0 || i === n - 1)) {
+        const d = i === 0 ? unit(L[0], L[1]) : unit(L[n - 2], L[n - 1]), nn = nrmOf(d);
+        push(P(v, nn, lo), P(v, nn, hi)); continue;
+      }
+      const vp = L[(i - 1 + n) % n], vn = L[(i + 1) % n];
+      const d1 = unit(vp, v), d2 = unit(v, vn), n1 = nrmOf(d1), n2 = nrmOf(d2);
+      const th = Math.atan2(n1[0] * n2[1] - n1[1] * n2[0], n1[0] * n2[0] + n1[1] * n2[1]);   // normal rotation
+      let nb = [n1[0] + n2[0], n1[1] + n2[1]]; const nbl = Math.hypot(nb[0], nb[1]);
+      nb = nbl < 1e-6 ? n1 : [nb[0] / nbl, nb[1] / nbl];
+      const cosH = Math.max(0.2, Math.cos(th / 2));
+      if (Math.abs(th) < 0.42) { push(P(v, nb, lo / cosH), P(v, nb, hi / cosH)); continue; }
+      // which side is on the outside of this turn? cross(d1,d2) vs side
+      const cr = d1[0] * d2[1] - d1[1] * d2[0];
+      const hiOut = cr * side < 0;                  // the +normal side is convex here
+      const hOut = hiOut ? hi : lo, hIn = hiOut ? lo : hi;   // fan side, pinned side
+      const room = Math.min(segLen((i - 1 + n) % n), segLen(i)) * 0.45;
+      const dl = Math.min(room, Math.abs(hIn) * Math.tan(Math.min(Math.abs(th), 2.6) / 2));
+      const pin = P(v, nb, hIn / Math.max(cosH, 0.45));
+      const mk = (pinPt, outPt) => hiOut ? push(pinPt, outPt) : push(outPt, pinPt);
+      // approach: perpendicular to the incoming edge, its pinned end already at the miter point
+      const va = [v[0] - d1[0] * dl, v[1] - d1[1] * dl], vl = [v[0] + d2[0] * dl, v[1] + d2[1] * dl];
+      mk(dl > 0.05 ? pin : P(va, n1, hIn), P(va, n1, hOut));
+      const miterK = 1 / Math.cos(th / 2);
+      if (corners === 'sharp' && Math.abs(miterK) < 2.8) {
+        mk(pin, P(v, n1, hOut)); mk(pin, P(v, nb, hOut * Math.abs(miterK))); mk(pin, P(v, n2, hOut));
+      } else {
+        const K = Math.max(2, Math.ceil(Math.abs(th) / 0.3));
+        for (let k = 0; k <= K; k++) {
+          const t = th * k / K, c = Math.cos(t), sn = Math.sin(t);
+          mk(pin, P(v, [n1[0] * c - n1[1] * sn, n1[0] * sn + n1[1] * c], hOut));
+        }
+      }
+      mk(dl > 0.05 ? pin : P(vl, n2, hIn), P(vl, n2, hOut));
+    }
+    // straight runs: extra pairs so the stitch angle stays square to the edge between corners
+    const out = [];
+    for (let i = 0; i < pairs.length; i++) {
+      out.push(pairs[i]);
+      if (!closed && i === pairs.length - 1) break;
+      const p = pairs[i], q = pairs[(i + 1) % pairs.length];
+      const ma = hyp(p[0], q[0]), mb = hyp(p[1], q[1]), m = Math.max(ma, mb);
+      const steps = Math.floor(m / 2.5);
+      for (let s2 = 1; s2 < steps; s2++) {
+        const t = s2 / steps;
+        out.push([[p[0][0] + (q[0][0] - p[0][0]) * t, p[0][1] + (q[0][1] - p[0][1]) * t], [p[1][0] + (q[1][0] - p[1][0]) * t, p[1][1] + (q[1][1] - p[1][1]) * t]]);
+      }
+    }
+    return out;
+  };
+  // pairs -> satin pieces (rail satin, straight between pairs)
+  S.edgeSatin = function (loop, o) {
+    const pr = S.edgePairs(loop, o);
+    if (pr.length < 2) return [];
+    const pts = []; pr.forEach(([a, b]) => { pts.push([a[0], a[1]], [b[0], b[1]]); });
+    return railSatin({ points: pts, closed: !o.open, curve: false, spacing: o.spacing || 0.36, pullComp: o.pullComp == null ? 0.12 : o.pullComp, underlay: o.underlay, splitAt: 9 });
+  };
   S.streamRails = (o) => {
     const P = o.points || [], m = Math.floor(P.length / 2); if (m < 2) return null;
     const A = [], B = []; for (let i = 0; i < m; i++) { A.push([P[2 * i][0], P[2 * i][1]]); B.push([P[2 * i + 1][0], P[2 * i + 1][1]]); }
@@ -587,24 +711,67 @@
     if (o.type === 'satin') return satinObject(o);
     if (o.type === 'run') return runObject(o);
     if (o.type === 'border') {
-      // satin outline around each traced edge loop (letter borders)
-      const out = [];
-      (o.loops || []).forEach(l => {
-        if (l.length < 3) return;
+      // satin border along each edge loop of the (merged) letter outline
+      const shape = (o.loops || []).filter(l => l.length >= 3);
+      if (!o.v2) {   // old files: loops are centre lines
+        const out = [];
+        shape.forEach(l => {
+          let ar = 0, per = 0; for (let i = 0; i < l.length; i++) { const p = l[i], q = l[(i + 1) % l.length]; ar += p[0] * q[1] - q[0] * p[1]; per += hyp(p, q); }
+          if (2 * Math.abs(ar) / 2 / Math.max(per, 1e-6) < o.width * 1.35) return;
+          satinObject({ points: l.concat([l[0], l[1]]).map(q => [q[0], q[1], o.width]), spacing: o.spacing || 0.38, underlay: o.underlay, pullComp: 0.12, nwin: 0.3 }).forEach(pc => out.push(pc));
+        });
+        return orderPieces(out);
+      }
+      // closed-up gaps between letter parts: satin across them, sewn during the border's
+      // underlay walk (the walk runs where the border will cover it, so no trims)
+      const chains = [];
+      (o.fills || []).filter(l => l.length >= 3).forEach(l => {
+        let mx = 0, my = 0; l.forEach(q => { mx += q[0]; my += q[1]; }); mx /= l.length; my /= l.length;
+        let sxx = 0, syy = 0, sxy = 0; l.forEach(q => { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+        const ax = 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI;
+        zigFill(l, ax + 90, 0.34, 0.12).forEach(r => { if (r.length > 1) chains.push(r); });
+      });
+      const rings = [], solo = [];
+      shape.forEach((l, li) => {
         let ar = 0, per = 0; for (let i = 0; i < l.length; i++) { const p = l[i], q = l[(i + 1) % l.length]; ar += p[0] * q[1] - q[0] * p[1]; per += hyp(p, q); }
         ar = Math.abs(ar) / 2;
-        const inner = 2 * ar / Math.max(per, 1e-6);           // ≈ half the loop's narrow width
-        if (inner < o.width * 1.35) {
-          // loop too small for a clean satin ring: fill it solid instead (no starbursts)
-          let cx = 0, cy = 0; l.forEach(q => { cx += q[0]; cy += q[1]; }); cx /= l.length; cy /= l.length;
-          const grow = l.map(q => { const dx = q[0] - cx, dy = q[1] - cy, d = Math.hypot(dx, dy) || 1; return [q[0] + dx / d * o.width / 2, q[1] + dy / d * o.width / 2]; });
-          tatami([grow], { angle: 45, spacing: 0.4, stitchLen: 2.5, pullComp: 0.1 }).forEach(r => { if (r.length > 1) out.push({ pts: r, kind: 'top' }); });
+        const isHole = !!(o.holeFlags && o.holeFlags[li]);
+        if (isHole && 2 * ar / Math.max(per, 1e-6) < o.width * 1.15) {
+          tatami([l], { angle: 45, spacing: 0.4, stitchLen: 2.5, pullComp: 0.1 }).forEach(r => { if (r.length > 1) solo.push({ pts: r, kind: 'top' }); });
           return;
         }
-        const pts = l.concat([l[0], l[1]]).map(q => [q[0], q[1], o.width]);
-        satinObject({ points: pts, spacing: o.spacing || 0.38, underlay: o.underlay, pullComp: 0.12, nwin: 0.3 }).forEach(pc => out.push(pc));
+        const pcs = S.edgeSatin(l, { side: S.edgeSide(l, shape), lo: o.lo == null ? -0.3 : o.lo, hi: o.width, corners: o.corners, spacing: o.spacing || 0.36, underlay: o.underlay !== false, pullComp: 0.1 });
+        if (pcs.length) rings.push(pcs);
       });
-      return orderPieces(out);
+      // hand each gap fill to the nearest ring's centre walk
+      const walkOf = r => r.find(p => p.kind === 'underlay');
+      const ins = rings.map(() => []);
+      chains.forEach(c => {
+        let best = null, bd = Infinity;
+        rings.forEach((r, ri) => { const w = walkOf(r) || r[r.length - 1]; w.pts.forEach((q, qi) => { const d = Math.min(hyp(q, c[0]), hyp(q, c[c.length - 1])); if (d < bd) { bd = d; best = [ri, qi]; } }); });
+        if (!best || bd > o.width + 1.2) { solo.push({ pts: c, kind: 'top' }); return; }
+        const q = (walkOf(rings[best[0]]) || rings[best[0]][0]).pts[best[1]];
+        ins[best[0]].push({ qi: best[1], c: hyp(q, c[0]) <= hyp(q, c[c.length - 1]) ? c : c.slice().reverse() });
+      });
+      const out = [];
+      rings.forEach((r, ri) => {
+        const w = walkOf(r);
+        if (!w || !ins[ri].length) { ins[ri].forEach(x => out.push({ pts: x.c, kind: 'top' })); r.forEach(p => out.push(p)); return; }
+        const list = ins[ri].sort((a, b) => a.qi - b.qi);
+        let from = 0;
+        list.forEach(x => {
+          const seg = w.pts.slice(from, x.qi + 1); if (seg.length > 1) out.push({ pts: seg, kind: 'underlay' });
+          out.push({ pts: x.c, kind: 'top' });
+          const end = x.c[x.c.length - 1], reach = o.width + 1.2;
+          let j = x.qi, bj = hyp(end, w.pts[x.qi]);
+          for (let k = x.qi; k < w.pts.length; k++) { const d = hyp(end, w.pts[k]); if (d < bj) { bj = d; j = k; } }
+          if (bj <= reach) out.push({ pts: [end, w.pts[j]], kind: 'underlay' });   // short hop back onto the walk
+          from = bj <= reach ? j : x.qi;
+        });
+        const rest = w.pts.slice(from); if (rest.length > 1) out.push({ pts: rest, kind: 'underlay' });
+        r.forEach(p => { if (p !== w) out.push(p); });
+      });
+      return orderPieces(solo).concat(out);
     }
     if (o.type === 'import') return (o.blocks || []).flatMap(bl => bl.lines.filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' })));
     if (o.type === 'stitches') return (o.lines || []).filter(l => l.length > 1).map(l => ({ pts: l, kind: 'top' }));

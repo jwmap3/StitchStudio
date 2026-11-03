@@ -87,6 +87,8 @@
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
+      case 'useBorder': { const o2 = SS.sel(); if (o2) SS.layerToBorder(o2); break; }
+      case 'secBorder': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { SS.secStart(o2.id); SS.toast('Click where the border should start, then where it should end'); } break; }
       case 'restitch': { const o2 = SS.sel(); if (o2 && (o2.type === 'import' || o2.type === 'stitches')) SS.restitch(o2); else SS.toast('Select an imported design first'); break; }
       case 'outline': outlineModal(); break;
       case 'guide': document.querySelector('#menu [data-act=help]').click(); break;
@@ -130,7 +132,7 @@
     if (c && (k === '-' || k === '_')) { e.preventDefault(); run('zout'); return; }
     if (c) return;
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); run('del'); return; }
-    if (k === 'Escape') { if (SS.alignCancel) SS.alignCancel(); run('deselect'); return; }
+    if (k === 'Escape') { if (SS.secCancel) SS.secCancel(); if (SS.alignCancel) SS.alignCancel(); run('deselect'); return; }
     if (k === '[') { run(e.shiftKey ? 'first' : 'earlier'); return; }
     if (k === ']') { run(e.shiftKey ? 'last' : 'later'); return; }
     if (k === '{') { run('first'); return; }
@@ -196,7 +198,7 @@
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
       <button class="it" data-c="solo"><b>${SS.solo() === o.id ? '👁 Show all layers' : '◎ Solo — hide the others'}</b></button>
-      <button class="it" data-c="center">Center in hoop</button>${(o.type === 'fill' && o.paths.length > 1) || (o.type === 'import' && o.blocks.length > 1) ? `<button class="it" data-c="isolate"><b>✂ Isolate this ${o.type === 'import' ? 'colour' : 'part'}</b></button>` : ''}${o.type === 'fill' ? `<button class="it" data-c="wrap">${o.wrap ? 'Straight thread angle' : '↻ Wrap thread around shape'}</button>` : ''}${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
+      <button class="it" data-c="center">Center in hoop</button>${(o.type === 'fill' && o.paths.length > 1) || (o.type === 'import' && o.blocks.length > 1) ? `<button class="it" data-c="isolate"><b>✂ Isolate this ${o.type === 'import' ? 'colour' : 'part'}</b></button>` : ''}${o.type === 'fill' ? '<button class="it" data-c="useBorder">🎨 Make this layer the satin border</button><button class="it" data-c="secBorder">✎ Border a section of this edge</button>' : ''}${o.type === 'fill' ? `<button class="it" data-c="wrap">${o.wrap ? 'Straight thread angle' : '↻ Wrap thread around shape'}</button>` : ''}${o.type === 'import' || o.type === 'stitches' ? '<button class="it" data-c="restitch"><b>✨ Re-stitch at this size</b></button>' : ''}<hr>
       <button class="it" data-c="later">Bring forward one</button><button class="it" data-c="earlier">Send back one</button><hr>
       <button class="it" data-c="del">Delete<span class="k">Del</span></button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom">Send picture to bottom</button>' : '<hr><button class="it" data-c="picTop">Bring picture to top</button>') + '<button class="it" data-c="flipPicH">⇋ Flip picture left–right</button><button class="it" data-c="flipPicV">⇵ Flip picture top–bottom</button><button class="it" data-c="rotPic">⟳ Rotate picture 90°</button>' : ''}`
       : `${clip ? '<button class="it" data-c="paste">Paste layer<span class="k">Ctrl+V</span></button>' : ''}${SS.solo() != null ? '<button class="it" data-c="showall"><b>👁 Show all layers</b></button>' : ''}<button class="it" data-c="fit">Fit hoop</button><button class="it" data-c="centerAll">Center whole design</button><button class="it" data-c="pic">Show / hide picture</button>${SS.doc().bg ? (SS.doc().bgOnTop ? '<hr><button class="it" data-c="picBottom"><b>Send picture to bottom</b></button>' : '<hr><button class="it" data-c="picTop"><b>Bring picture to top</b></button>') + '<button class="it" data-c="flipPicH">⇋ Flip picture left–right</button><button class="it" data-c="flipPicV">⇵ Flip picture top–bottom</button><button class="it" data-c="rotPic">⟳ Rotate picture 90°</button>' : ''}`;
