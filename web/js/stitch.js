@@ -554,7 +554,28 @@
     if (cur && cur.length > 1) chains.push(cur);
     return chains;
   }
+  // Traced outlines can double back on themselves for a fraction of a mm (a hairpin spur, or a
+  // tiny zig-zag). Each one looks like a 180° corner and makes the satin pivot into a bunch.
+  // Drop any vertex where the line reverses (turn > ~135°) over a short distance.
+  function despur(L, closed, reach) {
+    let P = L.slice(), changed = true, guard = 0;
+    while (changed && guard++ < 50) {
+      changed = false;
+      const n = P.length; if (n < (closed ? 4 : 3)) break;
+      const keep = new Array(n).fill(true);
+      for (let i = closed ? 0 : 1; i < (closed ? n : n - 1); i++) {
+        if (!keep[(i - 1 + n) % n]) continue;
+        const a = P[(i - 1 + n) % n], v = P[i], c = P[(i + 1) % n];
+        const l1 = hyp(a, v), l2 = hyp(v, c); if (l1 < 1e-6 || l2 < 1e-6) { keep[i] = false; changed = true; continue; }
+        const cosT = ((v[0] - a[0]) * (c[0] - v[0]) + (v[1] - a[1]) * (c[1] - v[1])) / (l1 * l2);
+        if ((cosT < -0.7 && Math.min(l1, l2) < reach) || (cosT < -0.94 && Math.min(l1, l2) < reach * 3)) { keep[i] = false; changed = true; }
+      }
+      P = P.filter((p, i) => keep[i]);
+    }
+    return P;
+  }
   S.zigFill = (l, a, sp, pc) => zigFill(l, a, sp, pc);
+  S.despur = despur;
   S.edgePairs = function (loop0, o) {
     const closed = !o.open, side = o.side || 1;
     const lo = o.lo, hi = o.hi, corners = o.corners || 'round';
@@ -563,6 +584,7 @@
     loop0.forEach(p => { if (!L.length || hyp(L[L.length - 1], p) > 0.08) L.push([p[0], p[1]]); });
     if (closed && L.length > 2 && hyp(L[0], L[L.length - 1]) < 0.08) L.pop();
     L = closed ? simplifyPts(L.concat([L[0]]), o.tol || 0.09, true) : simplifyPts(L, o.tol || 0.09, false);
+    L = despur(L, closed, Math.max(1.2, Math.min(4, Math.max(Math.abs(o.lo), Math.abs(o.hi)))));
     const n = L.length;
     if (n < (closed ? 3 : 2)) return [];
     const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
@@ -608,20 +630,53 @@
       mk(dl > 0.05 ? pin : P(vl, n2, hIn), P(vl, n2, hOut));
     }
     // straight runs: extra pairs so the stitch angle stays square to the edge between corners
-    const out = [];
+    const out0 = [];
     for (let i = 0; i < pairs.length; i++) {
-      out.push(pairs[i]);
+      out0.push(pairs[i]);
       if (!closed && i === pairs.length - 1) break;
       const p = pairs[i], q = pairs[(i + 1) % pairs.length];
       const ma = hyp(p[0], q[0]), mb = hyp(p[1], q[1]), m = Math.max(ma, mb);
       const steps = Math.floor(m / 2.5);
       for (let s2 = 1; s2 < steps; s2++) {
         const t = s2 / steps;
-        out.push([[p[0][0] + (q[0][0] - p[0][0]) * t, p[0][1] + (q[0][1] - p[0][1]) * t], [p[1][0] + (q[1][0] - p[1][0]) * t, p[1][1] + (q[1][1] - p[1][1]) * t]]);
+        out0.push([[p[0][0] + (q[0][0] - p[0][0]) * t, p[0][1] + (q[0][1] - p[0][1]) * t], [p[1][0] + (q[1][0] - p[1][0]) * t, p[1][1] + (q[1][1] - p[1][1]) * t]]);
       }
     }
-    return out;
+    return unfold(out0, L, closed, lo, hi);
   };
+  // Where the edge curves tighter than the border is wide, the far side of the satin would fold
+  // back over itself (stitches cross and bunch). Any point that lands closer to the edge than it
+  // should be is in such a fold: pin the whole fold to one point so the stitches fan cleanly.
+  function unfold(pairs, L, closed, lo, hi) {
+    const n = L.length, segs = []; for (let i = 0; i < (closed ? n : n - 1); i++) segs.push([L[i], L[(i + 1) % n]]);
+    const C = 2, grid = new Map(), key = (x, y) => x + ',' + y;
+    segs.forEach((s, si) => { const x0 = Math.floor(Math.min(s[0][0], s[1][0]) / C), x1 = Math.floor(Math.max(s[0][0], s[1][0]) / C), y0 = Math.floor(Math.min(s[0][1], s[1][1]) / C), y1 = Math.floor(Math.max(s[0][1], s[1][1]) / C);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const k = key(x, y); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(si); } });
+    const dist = (p, R) => { let best = Infinity; const r = Math.ceil(R / C) + 1, cx = Math.floor(p[0] / C), cy = Math.floor(p[1] / C), seen = new Set();
+      for (let x = cx - r; x <= cx + r; x++) for (let y = cy - r; y <= cy + r; y++) (grid.get(key(x, y)) || []).forEach(si => { if (seen.has(si)) return; seen.add(si); const [a, b] = segs[si], dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy, t = L2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)) : 0; best = Math.min(best, Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1])); });
+      return best; };
+    const m = pairs.length;
+    [[0, lo], [1, hi]].forEach(([side, h]) => {
+      const H = Math.abs(h); if (H < 0.6 || m < 3) return;
+      const bad = pairs.map(pr => dist(pr[side], H) < H * 0.8);
+      if (!bad.some(x => x) || bad.every(x => x)) return;
+      // walk runs of bad points (wrapping for closed loops), pin each run
+      const start = closed ? bad.findIndex((x, i) => !x && bad[(i + 1) % m]) : -1;
+      const visit = closed ? Array.from({ length: m }, (_, k) => (start + 1 + k) % m) : Array.from({ length: m }, (_, k) => k);
+      let run = [];
+      const flush = (after) => {
+        if (!run.length) return;
+        const bi = (run[0] - 1 + m) % m, ai = after;
+        const pb = (closed || run[0] > 0) ? pairs[bi][side] : null, pa = ai != null ? pairs[ai][side] : null;
+        const pin = pb && pa ? [(pb[0] + pa[0]) / 2, (pb[1] + pa[1]) / 2] : (pb || pa);
+        if (pin) run.forEach(i => { pairs[i][side] = [pin[0], pin[1]]; });
+        run = [];
+      };
+      visit.forEach(i => { if (bad[i]) run.push(i); else flush(i); });
+      flush(closed ? (start + 1) % m : null);
+    });
+    return pairs;
+  }
   // pairs -> satin pieces (rail satin, straight between pairs)
   S.edgeSatin = function (loop, o) {
     const pr = S.edgePairs(loop, o);

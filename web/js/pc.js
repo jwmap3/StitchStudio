@@ -87,6 +87,7 @@
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
+      case 'alignStart': { if (ctxPt) { SS.alignPick(ctxPt); SS.toast('Now right-click (or middle-click) the end point — everything between lines up'); } break; }
       case 'soloSel': { SS.setSoloMany(SS.multiIds()); layerSig = ''; renderLayers(); break; }
       case 'useBorder': { const o2 = SS.sel(); if (o2) SS.layerToBorder(o2); break; }
       case 'secBorder': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { SS.secStart(o2.id); SS.toast('Click where the border should start, then where it should end'); } break; }
@@ -194,6 +195,8 @@
   SS.cv.addEventListener('contextmenu', e => {
     e.preventDefault(); closeDD();
     const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p); ctxPt = p;
+    if (SS.alignPending() && SS.tool() === 'select') { SS.alignPick(p); return; }
+    const so0 = SS.sel(), onPt = so0 && ['fill', 'satin', 'run'].includes(so0.type) && !so0.edge && SS.hitNode(so0, p) >= 0;
     const mids0 = SS.multiIds();
     if (mids0.length > 1 && o && mids0.includes(o.id)) {
       ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="soloSel"><b>◎ Solo these — hide the others</b></button><button class="it" data-c="borderSel">Satin border around these</button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
@@ -201,8 +204,9 @@
       ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
       return;
     }
-    if (o) SS.select(o.id);
-    ctx.innerHTML = o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>
+    const lineUp = onPt ? `<button class="it" data-c="alignStart"><b>📏 Line up from this point…</b><span class="k">${so0.type === 'satin' && so0.mode === 'rails' ? 'this side only' : ''}</span></button><hr>` : '';
+    if (o && !onPt) SS.select(o.id);
+    ctx.innerHTML = onPt && (!o || o.id !== so0.id) ? `<div class="small" style="padding:4px 10px">${esc(so0.name || TYPE[so0.type])}</div>${lineUp}` : o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>${lineUp}
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
       <button class="it" data-c="copy">Copy<span class="k">Ctrl+C</span></button><button class="it" data-c="dup">Duplicate<span class="k">Ctrl+D</span></button>
       <button class="it" data-c="solo"><b>${SS.solo() === o.id ? '👁 Show all layers' : '◎ Solo — hide the others'}</b></button>
@@ -474,7 +478,10 @@
     L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h); g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
     if (round > 0) paint(L, 2 * round * PX, true);
     L = outer(T.contours(grab(), w, h));
-    return L.map(l => T.smoothLoop(l, 1.4, 50).map(q => [a + q[0] / PX, b + q[1] / PX]));
+    // smooth, then drop thin thorns / doubled-back zig-zags the smoothing can leave at sharp corners
+    // smooth with corner-cutting (can't tie little knots or thorns at sharp corners), then drop any doubled-back bits
+    const chaikin = P => { let Q = P; for (let it = 0; it < 2; it++) { const R = []; for (let i = 0; i < Q.length; i++) { const p0 = Q[i], p1 = Q[(i + 1) % Q.length]; R.push([p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25], [p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75]); } Q = R; } return Q; };
+    return L.map(l => Stitch.despur(chaikin(T.simplify(l, 1.3)).map(q => [a + q[0] / PX, b + q[1] / PX]), true, 2.5));
   }
   function shapeLoop(kind, cx, cy, W, H) {
     const pts = [], N = 160;

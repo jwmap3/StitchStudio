@@ -958,6 +958,7 @@
     if (k < 0) { toast('Middle-click right on a point'); return false; }
     if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); toast('Point A set — middle-click the second point'); return true; }
     const A = nodeAt(o, alignA.k), B = nodeAt(o, k);
+    if (o.type === 'satin' && o.mode === 'rails') return alignRailSide(o, A.pi, B.pi, k);
     if (A.li !== B.li) { toast('Both points must be on the same outline'); alignA = null; selNode = -1; draw(); return true; }
     const arr = o.type === 'fill' ? o.paths[A.li] : o.points, n = arr.length, closed = o.type === 'fill';
     let i0 = A.pi, i1 = B.pi;
@@ -979,6 +980,28 @@
     idx.forEach((i, j) => { const t = cum[j + 1] / tot; arr[i][0] = P[0] + (Q[0] - P[0]) * t; arr[i][1] = P[1] + (Q[1] - P[1]) * t; });
     alignA = null; selNode = k; commit(); renderSheet(); draw();
     toast(`Lined up ${idx.length} point${idx.length > 1 ? 's' : ''}`);
+    return true;
+  }
+  // streamline column: points alternate side A, side B (one pair per direction line).
+  // Line up only the side the first point is on; the second click picks the stretch.
+  function alignRailSide(o, ia, ib, kSel) {
+    const side = ia % 2, m = Math.floor(o.points.length / 2), closed = !!o.closed && m >= 3;
+    let a = Math.floor(ia / 2), b = Math.floor(ib / 2);
+    const pt = j => o.points[2 * j + side];
+    let chain = [];
+    if (!closed) { const lo = Math.min(a, b), hi = Math.max(a, b); for (let j = lo; j <= hi; j++) chain.push(j); }
+    else {
+      const walk = (s0, s1) => { const c = [s0]; for (let j = s0; j !== s1; j = (j + 1) % m) c.push((j + 1) % m); return c; };
+      const len = c => c.reduce((t, j, i) => i ? t + Math.hypot(pt(j)[0] - pt(c[i - 1])[0], pt(j)[1] - pt(c[i - 1])[1]) : 0, 0);
+      const c1 = walk(a, b), c2 = walk(b, a); chain = len(c1) <= len(c2) ? c1 : c2;
+    }
+    if (chain.length < 3) { toast('No points between those two on this side'); alignA = null; selNode = -1; draw(); return true; }
+    const P = pt(chain[0]), Q = pt(chain[chain.length - 1]);
+    const cum = [0]; for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(pt(chain[j])[0] - pt(chain[j - 1])[0], pt(chain[j])[1] - pt(chain[j - 1])[1]));
+    const tot = cum[cum.length - 1] || 1;
+    chain.slice(1, -1).forEach((j, i) => { const t = cum[i + 1] / tot, q = pt(j); q[0] = P[0] + (Q[0] - P[0]) * t; q[1] = P[1] + (Q[1] - P[1]) * t; });
+    alignA = null; selNode = 2 * chain[chain.length - 1] + side; commit(); renderSheet(); draw();
+    toast(`Lined up ${chain.length - 2} point${chain.length > 3 ? 's' : ''} on ${side ? 'side B' : 'side A'} only — the other side wasn't touched`);
     return true;
   }
   function hitNode(o, p) {
@@ -1007,7 +1030,7 @@
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
       const so = sel();
-      if (so && ['fill', 'satin', 'run'].includes(so.type)) { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
+      if (so && ['fill', 'satin', 'run'].includes(so.type) && !so.edge) { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
     }
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
@@ -1028,7 +1051,7 @@
         }
         // drag anywhere inside the selected layer's box to move the whole thing
         const P = 7 / view.s;
-        if (p[0] >= bb[0] - P && p[0] <= bb[2] + P && p[1] >= bb[1] - P && p[1] <= bb[3] + P && hitNode(o, p) < 0) { gesture.type = 'moveobj'; gesture.last = p; return; }
+        if (p[0] >= bb[0] - P && p[0] <= bb[2] + P && p[1] >= bb[1] - P && p[1] <= bb[3] + P && (o.edge || hitNode(o, p) < 0)) { gesture.type = 'moveobj'; gesture.last = p; return; }
       }
     }
     if (tool === 'select' && !preview && bgSel && doc.bg) {
@@ -1039,7 +1062,7 @@
     if (tool === 'select' && !preview) {
       const o = sel();
       if (o) {
-        const k = hitNode(o, p);
+        const k = o.edge ? -1 : hitNode(o, p);
         if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = o.type === 'text' ? -1 : k; draw(); return; }
         if (hitObject(p) === o) { gesture.type = 'moveobj'; gesture.last = p; return; }
       }
@@ -3140,7 +3163,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPick, alignCancel() { if (alignA) { alignA = null; selNode = -1; draw(); } },
+    alignPending: () => !!alignA, hitNode, alignPick, alignCancel() { if (alignA) { alignA = null; selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
