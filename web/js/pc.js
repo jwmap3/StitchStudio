@@ -87,6 +87,7 @@
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
+      case 'soloSel': { SS.setSoloMany(SS.multiIds()); layerSig = ''; renderLayers(); break; }
       case 'useBorder': { const o2 = SS.sel(); if (o2) SS.layerToBorder(o2); break; }
       case 'secBorder': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { SS.secStart(o2.id); SS.toast('Click where the border should start, then where it should end'); } break; }
       case 'restitch': { const o2 = SS.sel(); if (o2 && (o2.type === 'import' || o2.type === 'stitches')) SS.restitch(o2); else SS.toast('Select an imported design first'); break; }
@@ -140,7 +141,8 @@
     if (k === '?') { keysModal(); return; }
     if (k.startsWith('Arrow')) { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); if (!objs.length) return; e.preventDefault(); const st = e.shiftKey ? 1 : 0.1; objs.forEach(o => SS.translate(o, k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0, k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0)); SS.draw(); clearTimeout(nudgeT); nudgeT = setTimeout(() => SS.commit(), 500); return; }
     if (k === 'Enter' && SS.hasDraft && SS.hasDraft()) { e.preventDefault(); SS.finishDraft(); return; }
-    if (k.toLowerCase() === 'v') { if (!e.repeat && !SS.orderMode()) { pDown = true; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
+    if (k.toLowerCase() === 'v') { if (!e.repeat && !SS.orderMode()) { pDown = 'v'; SS.setOrderMode(true); layerSig = ''; renderLayers(); } return; }
+    if (k.toLowerCase() === 'i') { if (!e.repeat && !SS.orderMode()) { pDown = 'i'; SS.setIsoMode(true); layerSig = ''; renderLayers(); } return; }
     const tools = { v: 'select', i: 'pick', b: 'brush', d: 'draw', t: 'text', a: 'auto', l: 'layers', s: 'stream' };
     const t = tools[k.toLowerCase()]; if (t) { document.querySelector(`#tools [data-tool=${t}]`).click(); return; }
     if (k.toLowerCase() === 'r') run('real');
@@ -154,14 +156,20 @@
   let pDown = false;
   window.addEventListener('keyup', e => {
     if (e.key === ' ') spaceDown = false;
-    if (e.key.toLowerCase() === 'v' && pDown) {
+    if (e.key.toLowerCase() === 'v' && pDown === 'v') {
       pDown = false;
       const n = SS.orderList().length;
       SS.setOrderMode(false); layerSig = ''; renderLayers();
       if (n === 0) document.querySelector('#tools [data-tool=select]').click();   // a quick tap of V is still the Select tool
     }
+    if (e.key.toLowerCase() === 'i' && pDown === 'i') {
+      pDown = false;
+      const n = SS.orderList().length;
+      SS.setIsoMode(false); layerSig = ''; renderLayers();
+      if (n === 0) document.querySelector('#tools [data-tool=pick]').click();     // a quick tap of I is still the Pick tool
+    }
   });
-  window.addEventListener('blur', () => { if (pDown) { pDown = false; SS.setOrderMode(false); layerSig = ''; renderLayers(); } });
+  window.addEventListener('blur', () => { if (pDown) { const k2 = pDown; pDown = false; if (k2 === 'i') SS.setIsoMode(false); else SS.setOrderMode(false); layerSig = ''; renderLayers(); } });
 
   // ---------------- pan with space-drag or middle mouse (captured before the editor sees it)
   const stage = $('#stage'); let panning = null;
@@ -188,7 +196,7 @@
     const r = SS.cv.getBoundingClientRect(), p = SS.toMM(e.clientX - r.left, e.clientY - r.top), o = SS.hitObject(p); ctxPt = p;
     const mids0 = SS.multiIds();
     if (mids0.length > 1 && o && mids0.includes(o.id)) {
-      ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="borderSel">Satin border around these</button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
+      ctx.innerHTML = `<div class="small" style="padding:4px 10px">${mids0.length} layers selected</div><button class="it" data-c="del"><b>Delete ${mids0.length} layers</b><span class="k">Del</span></button><button class="it" data-c="soloSel"><b>◎ Solo these — hide the others</b></button><button class="it" data-c="borderSel">Satin border around these</button><button class="it" data-c="deselect">Clear selection<span class="k">Esc</span></button>`;
       ctx.style.left = Math.min(e.clientX, innerWidth - 240) + 'px'; ctx.style.top = Math.min(e.clientY, innerHeight - 120) + 'px'; ctx.classList.add('open');
       ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
       return;
@@ -266,8 +274,8 @@
     if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
     box.innerHTML = d.objects.map((o, i) => {
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
-      return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || (so != null && so !== o.id) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
-        <span class="num" ${ol.includes(o.id) ? 'style="background:#f2b134;color:#16181d;border-radius:999px;font-weight:700"' : ''}>${ol.includes(o.id) ? '#' + (ol.indexOf(o.id) + 1) : i + 1}</span><span class="dot" style="background:${dot}"></span>
+      return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || !SS.inView(o) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
+        <span class="num" ${ol.includes(o.id) ? `style="background:${SS.pickKind() === 'iso' ? '#4cc2ff' : '#f2b134'};color:#16181d;border-radius:999px;font-weight:700"` : ''}>${ol.includes(o.id) ? (SS.pickKind() === 'iso' ? '◎' : '#' + (ol.indexOf(o.id) + 1)) : i + 1}</span><span class="dot" style="background:${dot}"></span>
         <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
     }).join('');
@@ -427,7 +435,7 @@
   function modal(html) { $('#modalBox').innerHTML = html + '<div class="btns" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="mClose">Close</button></div>'; $('#modal').classList.add('open'); $('#mClose').onclick = () => $('#modal').classList.remove('open'); }
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') $('#modal').classList.remove('open'); });
   function keysModal() {
-    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Hold V + click layers', 'Set sew order: first click sews first (release V to apply)'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
+    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Hold V + click layers', 'Set sew order: first click sews first (release V to apply)'], ['Hold I + click layers', 'Solo: show only the layers you clicked (release I)'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
     modal('<h2>Keyboard shortcuts</h2><table>' + K.map(([k, v]) => `<tr><td style="white-space:nowrap"><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>');
   }
   function threadModal() {
@@ -446,7 +454,7 @@
   const PALETTE = () => [...new Set(FAVC().concat(['#000000', '#ffffff', '#0b2a5b', '#1f3a93', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#2e7d32', '#7a7a7a', '#c0c0c0', '#e35205']))];
   // union of everything stitched (or given layers) -> loops offset outward by `off` mm, inside corners rounded by `round` mm
   function outlineLoops(objs, off, round) {
-    const PX = 8, list = SS.expand(objs).filter(o => !o.hidden);
+    const PX = 10, list = SS.expand(objs).filter(o => !o.hidden);
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
     const P = list.map(o => SS.pieces(o));
     P.forEach(ps => ps.forEach(pc => pc.pts.forEach(q => { a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[0]); d = Math.max(d, q[1]); })));
@@ -466,7 +474,7 @@
     L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h); g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
     if (round > 0) paint(L, 2 * round * PX, true);
     L = outer(T.contours(grab(), w, h));
-    return L.map(l => T.smoothLoop(l, 1.2, 60).map(q => [a + q[0] / PX, b + q[1] / PX]));
+    return L.map(l => T.smoothLoop(l, 1.4, 50).map(q => [a + q[0] / PX, b + q[1] / PX]));
   }
   function shapeLoop(kind, cx, cy, W, H) {
     const pts = [], N = 160;
@@ -490,12 +498,15 @@
   const loopBox = l => { let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity; l.forEach(q => { a = Math.min(a, q[0]); b = Math.min(b, q[1]); c = Math.max(c, q[0]); d = Math.max(d, q[1]); }); return [a, b, c, d]; };
   const insetLoop = (l, k) => { const bb = loopBox(l), cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2; return l.map(q => { const dx = q[0] - cx, dy = q[1] - cy, dd = Math.hypot(dx, dy) || 1; return [q[0] - dx / dd * k, q[1] - dy / dd * k]; }); };
   const closeRun = l => l.concat([l[0]]);
-  function swRow(id, cur) { return `<div class="swatches" id="${id}">${PALETTE().map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span></div>`; }
+  const USED = () => { const s = []; SS.doc().objects.filter(o => !o.hidden).forEach(o => { (o.type === 'import' ? o.blocks.map(b => b.color) : [o.color]).forEach(c => { c = (c || '').toLowerCase(); if (c && !s.includes(c)) s.push(c); }); (o.borders || []).forEach(b => { const c = (b.color || '').toLowerCase(); if (b.w > 0 && c && !s.includes(c)) s.push(c); }); }); return s; };
+  function swRow(id, cur) {
+    const used = USED(), sw = c => `<button class="sw ${c === (cur || '').toLowerCase() || c === cur ? 'on' : ''}" data-c="${c}" style="background:${c}" title="${typeof SS.threadName === 'function' ? SS.threadName(c) : c}"></button>`;
+    return `<div id="${id}">${used.length ? `<div class="small" style="margin:2px 0 4px">Threads already in this design</div><div class="swatches" style="margin-bottom:8px">${used.map(sw).join('')}</div><div class="small" style="margin:0 0 4px">Other threads</div>` : ''}<div class="swatches">${PALETTE().filter(c => !used.includes(c.toLowerCase())).map(sw).join('')}<span class="sw swc" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"><input type="color" value="${cur}"></span></div></div>`; }
   function bindSw(id, fn) { const el = $('#' + id); el.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { el.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); fn(b.dataset.c); })); el.querySelector('input').addEventListener('input', e => fn(e.target.value)); }
   const tg = (id, val, opts) => `<div class="toggle" id="${id}">${opts.map(([v, l]) => `<button data-v="${v}" class="${String(v) === String(val) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   function bindTg(id, fn) { const el = $('#' + id); el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { el.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); fn(b.dataset.v); })); }
 
-  const patch = { shape: 'around', w: 3.5, h: 3.5, margin: 0.15, bg: 'stitch', bgColor: '#0b2a5b', border: 4, borderColor: '#f2a900', density: 0.42 };
+  const patch = { shape: 'around', fit: 'tight', w: 3.5, h: 3.5, margin: 0.1, bg: 'stitch', bgColor: '#0b2a5b', border: 4, borderColor: '#f2a900', density: 0.42 };
   function patchModal() {
     const ds = SS.design(), has = ds.count > 0;
     if (has && patch.shape !== 'around') { const b = ds.bounds; patch.w = +((b[2] - b[0]) / IN + 0.6).toFixed(2); patch.h = +((b[3] - b[1]) / IN + 0.6).toFixed(2); }
@@ -504,7 +515,8 @@
       <p class="small" style="margin:0 0 10px">Builds a patch the way pros sew it: background first, your design on top, then a thick satin edge last. ${has ? 'It wraps around your current design.' : 'Add your design or text after, and it will sew between the background and the edge.'}</p>
       <div class="row"><label>Shape</label>${tg('ptShape', P.shape, [['around', 'Around design'], ['circle', 'Circle'], ['oval', 'Oval'], ['rounded', 'Rounded'], ['rect', 'Rectangle'], ['shield', 'Shield']])}</div>
       <div class="row" id="ptSizeRow"><label>Size</label><input type="number" id="ptW" step="0.1" min="1" value="${P.w}" style="width:90px"> × <input type="number" id="ptH" step="0.1" min="1" value="${P.h}" style="width:90px"> in</div>
-      <div class="row" id="ptMarRow"><label>Margin</label><input type="number" id="ptM" step="0.05" min="0" value="${P.margin}" style="width:90px"> in around the design</div>
+      <div class="row" id="ptMarRow"><label>Margin</label><input type="number" id="ptM" step="0.02" min="0" value="${P.margin}" style="width:90px"> in between the design and the edge</div>
+      <div class="row" id="ptFitRow"><label>Fit</label>${tg('ptFit', P.fit, [['tight', 'Tight — follows corners'], ['snug', 'Snug'], ['smooth', 'Smooth (rounded)']])}</div>
       <div class="row"><label>Background</label>${tg('ptBg', P.bg, [['stitch', 'Stitched (full)'], ['twill', 'Twill appliqué'], ['none', 'None (fabric)']])}</div>
       <p class="small" id="ptBgNote" style="margin:0 0 6px"></p>
       <div id="ptBgCol"><div class="row"><label>Background colour</label></div>${swRow('ptBgC', P.bgColor)}</div>
@@ -512,11 +524,11 @@
       <div class="row"><label>Edge colour</label></div>${swRow('ptBC', P.borderColor)}
       <div class="btns" style="margin-top:14px"><button class="btn primary" id="ptGo">Create patch</button></div>`);
     const sync = () => {
-      $('#ptSizeRow').style.display = P.shape === 'around' ? 'none' : ''; $('#ptMarRow').style.display = P.shape === 'around' ? '' : 'none';
+      $('#ptSizeRow').style.display = P.shape === 'around' ? 'none' : ''; $('#ptMarRow').style.display = $('#ptFitRow').style.display = P.shape === 'around' ? '' : 'none';
       $('#ptBgCol').style.display = P.bg === 'none' ? 'none' : '';
       $('#ptBgNote').textContent = P.bg === 'stitch' ? 'Whole patch is filled with thread (classic embroidered patch).' : P.bg === 'twill' ? 'Machine sews a placement line and STOPS: lay twill fabric over it, continue; it tacks it down and stops again so you can trim close, then sews the design and edge. Fewer stitches, faster.' : 'Design and edge only, straight onto the garment or patch fabric.';
     };
-    bindTg('ptShape', v => { P.shape = v; sync(); }); bindTg('ptBg', v => { P.bg = v; sync(); }); bindTg('ptB', v => P.border = +v);
+    bindTg('ptShape', v => { P.shape = v; sync(); }); bindTg('ptFit', v => P.fit = v); bindTg('ptBg', v => { P.bg = v; sync(); }); bindTg('ptB', v => P.border = +v);
     bindSw('ptBgC', c => P.bgColor = c); bindSw('ptBC', c => P.borderColor = c); sync();
     $('#ptGo').addEventListener('click', () => { P.w = +$('#ptW').value || P.w; P.h = +$('#ptH').value || P.h; P.margin = +$('#ptM').value; $('#modal').classList.remove('open'); makePatch(); });
   }
@@ -527,7 +539,7 @@
       if (!SS.design().count) { SS.toast('Add a design first, or pick a shape like Circle'); return; }
       SS.busy(true);
       const big = L => L.length ? L.reduce((x, y) => Math.abs(T.area(y)) > Math.abs(T.area(x)) ? y : x) : null;
-      const out = P.margin * IN + bw, R = 3 + bw;
+      const out = P.margin * IN + bw, R = P.fit === 'smooth' ? 3 + bw : P.fit === 'snug' ? 2.2 : 0.9;   // R: how big a notch the edge bridges
       edge = big(outlineLoops(objs, out, R));
       const cache = {};
       inside = k => cache[k] || (cache[k] = big(outlineLoops(objs, Math.max(0.2, out - k), R + k)) || insetLoop(edge, k));
@@ -552,7 +564,9 @@
         mk({ type: 'satin', name: 'Twill tack zig-zag', points: closeRun(tack).concat([tack[1]]).map(q => [q[0], q[1], 1.4]), spacing: 1.6, underlay: false, pullComp: 0, color: P.bgColor, threadName: 'Tack-down - then trim twill' }),
       );
     }
-    d.objects.push(mk({ type: 'satin', name: 'Patch edge', points: closeRun(centre).concat([centre[1]]).map(q => [q[0], q[1], bw]), spacing: 0.36, underlay: true, pullComp: 0.15, color: P.borderColor, threadName: 'Patch edge', stopBefore: P.bg === 'twill' }));
+    // satin edge: from the cut line inwards, clean pivot corners (adjustable later like any border)
+    const eo = SS.edgeBorderObj(edge, [edge], { w: bw, place: 'in', gap: 0, corners: 'round' }, P.borderColor, 'Patch edge');
+    d.objects.push(mk(Object.assign(eo, { pullComp: 0.15, threadName: 'Patch edge', stopBefore: P.bg === 'twill' })));
     SS.commit(); SS.select(added[added.length - 1].id); SS.draw();
     const bb = loopBox(edge);
     SS.toast(`Patch ${inch(bb[2] - bb[0])} × ${inch(bb[3] - bb[1])} in created — background sews first, edge last`);

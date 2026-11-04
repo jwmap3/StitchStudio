@@ -79,16 +79,22 @@
   // Solo: view just one layer (others hidden on screen only — they still save and stitch)
   let solo = null, pickMany = false;
   // Order mode: click layers in the order they should sew (PC: hold P; phone: Tap order button)
-  let orderMode = false, orderList = [];
+  let orderMode = false, orderList = [], pickKind = 'order';
   function setOrderMode(on) {
-    if (on) { orderMode = true; orderList = []; hint('Click layers in the order they should sew — first to last'); draw(); return; }
+    if (on) { orderMode = true; pickKind = 'order'; orderList = []; hint('Click layers in the order they should sew — first to last'); draw(); return; }
     const list = orderList.slice(); orderMode = false; orderList = []; hint('');
     if (list.length >= 2) applyOrder(list); else { draw(); if (list.length === 1) toast('Pick at least 2 layers to set an order'); }
+  }
+  function setIsoMode(on) {
+    if (on) { orderMode = true; pickKind = 'iso'; orderList = []; hint('Click the layers to keep showing — the rest hide when you let go'); draw(); return; }
+    const list = orderList.slice(); orderMode = false; orderList = []; pickKind = 'order'; hint('');
+    if (list.length) { setSoloMany(list); toast(`Showing only ${list.length} layer${list.length > 1 ? 's' : ''} — Show all (top bar) brings the rest back`); } else draw();
   }
   function orderToggle(id) {
     if (!orderMode) return;
     const k = orderList.indexOf(id);
     if (k >= 0) orderList.splice(k, 1); else orderList.push(id);
+    if (pickKind === 'iso') { hint(orderList.length ? `Keep showing: ${orderList.length} layer${orderList.length > 1 ? 's' : ''}` : 'Click the layers to keep showing'); draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { } return; }
     hint(orderList.length ? `Sew order: ${orderList.map((x, i) => (i + 1) + ' ' + ((doc.objects.find(o => o.id === x) || {}).name || '')).join(' → ')}` : 'Click layers in the order they should sew — first to last');
     draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { }
   }
@@ -101,8 +107,18 @@
     doc.objects = next; commit(); renderSheet(); draw();
     toast(`Sew order set for ${objs.length} layers: ${objs.map(o => o.name || o.type).slice(0, 4).join(' → ')}${objs.length > 4 ? ' …' : ''}`);
   }
-  const inView = o => solo == null || o.id === solo;
+  let soloSet = null;   // several layers soloed at once
+  const inView = o => soloSet ? soloSet.has(o.id) : (solo == null || o.id === solo);
+  function setSoloMany(ids) {
+    ids = (ids || []).filter(id => doc.objects.some(o => o.id === id));
+    if (ids.length < 2) { soloSet = null; setSolo(ids.length ? ids[0] : null); return; }
+    soloSet = new Set(ids); solo = -1; selId = ids[ids.length - 1]; multi.clear(); bgSel = false;
+    previewCache = null; still.key = null; sprite.key = null;
+    updateSoloBar(); renderSheet(); draw();
+    if (window.onSSSolo) try { window.onSSSolo(solo); } catch (e) { }
+  }
   function setSolo(id) {
+    soloSet = null;
     solo = (id == null || solo === id) ? null : id;
     if (solo != null && !doc.objects.some(o => o.id === solo)) solo = null;
     if (solo != null) { selId = solo; multi.clear(); bgSel = false; }
@@ -118,7 +134,7 @@
       (cv.parentElement || document.body).appendChild(bar);
       bar.addEventListener('pointerdown', e => e.stopPropagation());
     }
-    const o = solo != null && doc.objects.find(x => x.id === solo);
+    const o = soloSet ? { name: soloSet.size + ' layers' } : solo != null && doc.objects.find(x => x.id === solo);
     if (!o) { bar.style.display = 'none'; return; }
     bar.innerHTML = `<span>Solo: ${esc(o.name || o.type)} — others hidden</span><button style="border:0;border-radius:999px;background:#0b1220;color:#fff;padding:5px 12px;font:600 12px system-ui;cursor:pointer">Show all</button>`;
     bar.querySelector('button').addEventListener('click', () => setSolo(null));
@@ -284,7 +300,7 @@
     const d = fab.querySelector('#fabDone'); d.disabled = !ok; d.style.opacity = ok ? '1' : '.45';
     d.textContent = draft && draft.rails && draft.closed ? '✓ Stitch loop' : '✓ Stitch it';
   }
-  function draw() { if (solo != null && !doc.objects.some(o => o.id === solo)) { solo = null; previewCache = null; updateSoloBar(); } updateUndo(); updateFab(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
+  function draw() { if (soloSet && ![...soloSet].some(id => doc.objects.some(o => o.id === id))) { soloSet = null; solo = null; previewCache = null; updateSoloBar(); } if (!soloSet && solo != null && !doc.objects.some(o => o.id === solo)) { solo = null; previewCache = null; updateSoloBar(); } updateUndo(); updateFab(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (navFast && frame.ok) drawFromFrame(); else drawNow(); }); }
   function drawFromFrame() {
     const r = cv.getBoundingClientRect(), dpr = cv.width / r.width, f = frame.view, k = view.s / f.s;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -449,9 +465,10 @@
     orderList.forEach((id, i) => {
       const o = doc.objects.find(x => x.id === id), bb = o && bbox(o); if (!bb) return;
       const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]);
-      ctx.strokeStyle = '#f2b134'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(a - 3, b - 3, c - a + 6, d - b + 6); ctx.setLineDash([]);
+      const col = pickKind === 'iso' ? '#4cc2ff' : '#f2b134';
+      ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(a - 3, b - 3, c - a + 6, d - b + 6); ctx.setLineDash([]);
       const cx = (a + c) / 2, cy = (b + d) / 2;
-      ctx.fillStyle = '#f2b134'; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, 7); ctx.fill(); ctx.fillStyle = '#16181d'; ctx.fillText(String(i + 1), cx, cy + 1);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(cx, cy, 14, 0, 7); ctx.fill(); ctx.fillStyle = '#16181d'; ctx.fillText(pickKind === 'iso' ? '◎' : String(i + 1), cx, cy + 1);
     });
     ctx.restore();
   }
@@ -2580,7 +2597,7 @@
       const b = bs[bi] || { w: 0, color: bi ? '#ffffff' : '#000000' };
       if (bi === 1 && !(bs[0] && bs[0].w > 0)) return;
       h += `<div class="row"><label>${bi ? 'Outer border' : 'Border'}</label><div class="toggle" id="tB${bi}" style="flex:1;display:flex">${BW.map(([v, l]) => `<button data-v="${v}" class="${Math.abs((b.w || 0) - v) < 0.05 ? 'on' : ''}" style="flex:1;padding:8px 4px;font-size:13px">${l}</button>`).join('')}</div></div>`;
-      if (b.w > 0) h += `<div class="swatches" id="tBc${bi}" style="margin:0 0 10px">${favs.concat(THREADS.filter(c => !favs.includes(c))).slice(0, 18).map(c => `<button class="sw ${c === b.color ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px"></button>`).join('')}</div>`;
+      if (b.w > 0) h += `<div class="swatches" id="tBc${bi}" style="margin:0 0 10px">${[...new Set(usedColors().concat(favs, THREADS))].slice(0, 22).map(c => `<button class="sw ${c === b.color ? 'on' : ''}" data-c="${c}" style="background:${c};width:30px;height:30px"></button>`).join('')}</div>`;
     });
     h += '<p class="small" style="margin:0 0 6px">Borders are dense satin around the letters, sewn after them. Letters that touch share one border; gaps too narrow for two borders are filled solid. Two borders = a thin inner line plus an outer edge (the varsity look).</p>';
     if (!(bs[0] && bs[0].w > 0)) return h;
@@ -2632,6 +2649,7 @@
       const c = $('#tBc' + bi); if (c) c.querySelectorAll('[data-c]').forEach(b2 => b2.addEventListener('click', () => { o.borders[bi].color = b2.dataset.c; commit(); renderSheet(); draw(); }));
     });
   }
+  function usedColors() { const s = []; doc.objects.filter(o => !o.hidden).forEach(o => { (o.type === 'import' ? o.blocks.map(b => b.color) : [o.color]).concat((o.borders || []).filter(b => b && b.w > 0).map(b => b.color)).forEach(c => { c = (c || '').toLowerCase(); if (c && !s.includes(c)) s.push(c); }); }); return s; }
   // border placement controls (shared by the fill panel, a border's own panel, and text borders)
   function edgeOptRows(v, pre, onChange, opts) {
     opts = opts || {};
@@ -2698,7 +2716,8 @@
       parts.push(`</div><div class="sec"><h3>Edge border</h3><p class="small" style="margin:0 0 6px">A smooth satin band around the edge of this shape, like the rim on a Star of Life patch.</p>
         <div class="row"><label>Around</label><div class="toggle" id="bdT">${[['layer', 'This layer'], ['colour', 'This colour'], ['sel', multi.size > 1 ? `Selected (${multi.size})` : 'Selected'], ['all', 'Whole design']].map(([v, l]) => `<button data-v="${v}" class="${borderTarget === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
         <p class="small" style="margin:0 0 6px">${borderTarget === 'layer' ? 'Follows this layer’s own edges.' : borderTarget === 'colour' ? 'One border around every layer of this thread colour, as one shape.' : borderTarget === 'sel' ? 'One border around the outside of all the layers you Ctrl+clicked, as one shape.' : 'One border around the outside of everything, as one shape.'}</p>
-        <div class="row"><label>Colour</label><div class="swatches" id="bdC" style="flex:1">${[o.color, '#000000', '#ffffff', '#c8102e', '#0b2a6b', '#d49b2a', '#9e9e9e', '#1b5e20'].map(c => `<button class="sw ${c === bc ? 'on' : ''}" data-c="${c}" style="background:${c};width:28px;height:28px" title="${threadName(c)}"></button>`).join('')}</div></div>`);
+        <p class="small" style="margin:0 0 4px">First swatches = threads already in this design</p>
+        <div class="row"><label>Colour</label><div class="swatches" id="bdC" style="flex:1">${[...new Set(usedColors().concat([o.color, '#000000', '#ffffff', '#c8102e', '#0b2a6b', '#d49b2a', '#9e9e9e', '#1b5e20']))].map(c => `<button class="sw ${c === bc ? 'on' : ''}" data-c="${c}" style="background:${c};width:28px;height:28px" title="${threadName(c)}"></button>`).join('')}</div></div>`);
       parts.push(slider('Border width', 'bdWs', 0.8, 6, 0.1, borderW, ' mm', v => { borderW = v; }));
       parts.push(edgeOptRows({ place: borderPlace, gap: borderGap, corners: borderCorners, holes: borderHoles }, 'bd', (k, v) => { if (k === 'place') borderPlace = v; if (k === 'gap') borderGap = v; if (k === 'corners') borderCorners = v; if (k === 'holes') borderHoles = v; }));
       parts.push(`<div class="btns" style="margin-top:6px">${btn('bdAdd', '＋ Add satin border', 'primary')}${btn('bdSec', '✎ Border a section')}</div>
@@ -2880,7 +2899,7 @@
 
   function renderLayers() {
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
-    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lOrder', orderMode ? `✓ Done (${orderList.length})` : '🔢 Tap order', orderMode ? 'primary' : '')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
+    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lOrder', orderMode && pickKind === 'order' ? `✓ Done (${orderList.length})` : '🔢 Tap order', orderMode && pickKind === 'order' ? 'primary' : '')}${btn('lIso', orderMode && pickKind === 'iso' ? `✓ Show only (${orderList.length})` : (solo != null ? '👁 Show all' : '◎ Tap to solo'), orderMode && pickKind === 'iso' ? 'primary' : '')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
     doc.objects.forEach((o, i) => {
       const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
@@ -2893,7 +2912,8 @@
     parts.push('</div>');
     mount(parts);
     on('lSelAll', () => { pickMany = false; selectAll(); });
-    on('lOrder', () => { if (!orderMode) { setOrderMode(true); renderLayers(); toast('Tap layers on the design (or in this list) in the order they should sew'); } else { setOrderMode(false); renderLayers(); } });
+    on('lIso', () => { if (orderMode && pickKind === 'iso') { setIsoMode(false); renderLayers(); return; } if (solo != null) { setSolo(null); renderLayers(); return; } if (orderMode) setOrderMode(false); setIsoMode(true); renderLayers(); toast('Tap the layers to keep showing (on the design or in this list), then ✓ Show only'); });
+    on('lOrder', () => { if (orderMode && pickKind === 'iso') { setIsoMode(false); } if (!orderMode) { setOrderMode(true); renderLayers(); toast('Tap layers on the design (or in this list) in the order they should sew'); } else { setOrderMode(false); renderLayers(); } });
     on('lPickMany', () => {
       if (!pickMany) { pickMany = true; multi.clear(); renderLayers(); return; }
       pickMany = false;
@@ -3105,8 +3125,9 @@
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
     relayoutText() { doc.objects.filter(x => x.type === 'text').forEach(layoutText); cache.clear(); draw(); },
+    edgeBorderObj(loop, shape, cfg, color, name) { const e = Object.assign({ src: loop.map(q => [q[0], q[1]]), side: S.edgeSide(loop, shape), gap: 0, corners: 'round', place: 'out', shift: 0 }, cfg); const m = { type: 'satin', mode: 'rails', closed: true, curve: false, name, spacing: 0.36, underlay: true, pullComp: 0.12, color, edge: e }; m.points = edgeSatinPoints(e); return m; }, threadName,
     layerToBorder, detachTextBorder, secStart(id) { secArm = { id }; hint('Click on the outline where the border should START (Esc to cancel)'); }, secCancel() { if (secArm) { secArm = null; hint(''); draw(); } },
-    setOrderMode, orderToggle, orderMode: () => orderMode, orderList: () => orderList.slice(), renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
+    setIsoMode, setSoloMany, inView, pickKind: () => pickKind, setOrderMode, orderToggle, orderMode: () => orderMode, orderList: () => orderList.slice(), renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
     addObject, exportFile, saveBytes, safeName, toast, busy, layoutText, toMM, toPX, hoop, hoopDef, fitInfo, nearestThread, CHART,
     autosave, setDoc(d) { doc = Object.assign(newDoc(), d); cache.clear(); selId = null; solo = null; updateSoloBar(); undoStack.length = redoStack.length = 0; lastSnap = snapshot(); updateUndo(); bgImg = null; if (doc.bg) loadBg(doc.bg.src, false); $('#title').textContent = doc.name; updateHoopChip(); autosave(); fit(); renderSheet(); },
     loadImageDataURL(src, name) { loadBg(src, true); if (name && doc.name === 'Untitled') { doc.name = name; $('#title').textContent = name; } setTool('auto'); },

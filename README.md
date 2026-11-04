@@ -34,6 +34,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Thread chart & My threads**: every colour picker has "All 60 threads" with names, plus your 7 personal quick-access threads (set them in Pick → My threads → Edit). In Pick, tap one of your threads to stitch new picks in it.
 - **Set sew order by clicking** (PC: hold **V**, click layers on the design or in the Layers list in the order they should sew, release V; phone: Layers → 🔢 Tap order → tap → ✓ Done). Numbered badges show the order; layers you don't click keep their place. A quick tap of V is still the Select tool.
 - **Move several layers at once**: highlight them (Ctrl+click on PC, Pick many on phone), then drag any of them, or arrow-key nudge, and they all move together.
+- **Solo several layers**: hold **I** and click layers (on the design or in the list), let go, and only those show (phone: Layers → ◎ Tap to solo). Right-click a Ctrl+clicked group → ◎ Solo these.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.
 - **Realistic thread view** while you edit (sheen by stitch direction, shadows, fabric texture; toggle in the header) and **Preview** with sew-out slider, fabric colours, stitch count, trims, colours, time.
 
@@ -45,7 +46,7 @@ Same engine as the phone app, with a desktop interface (`web/pc.html` + `web/js/
 - Layers: drag to reorder, double-click to rename, show/hide, sew first/last.
 - Keyboard shortcuts (press `?` in the app), arrow-key nudging, right-click layer menu, space/middle-mouse pan, actual-size zoom.
 - Drag & drop pictures, VP3/DST and projects; paste screenshots straight from the clipboard; copy/paste layers.
-- **Patch maker** (M): around-the-design or circle / oval / rounded / rectangle / shield; stitched background, twill appliqué (placement line → stop → tack-down → stop → trim) or none; thick satin edge up to a 6 mm merrow look, sewn last.
+- **Patch maker** (M): around-the-design (**Fit: Tight** follows the design into inside corners, Snug, or Smooth) or circle / oval / rounded / rectangle / shield; the satin edge is built with clean pivot corners and stays adjustable; colour pickers show **threads already in your design** first; stitched background, twill appliqué (placement line → stop → tack-down → stop → trim) or none; thick satin edge up to a 6 mm merrow look, sewn last.
 - **Outline / offset** (O): run, bean or satin outline at a set distance around the whole design or one layer.
 - Sew-out simulation with speed control; realistic PNG mockup export; printable production worksheet (thread sequence, stitch counts, size, hoop, time); Save / Save As to a folder you choose.
 
