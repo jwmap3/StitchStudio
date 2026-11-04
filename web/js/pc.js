@@ -523,7 +523,7 @@
       <div class="row"><label>Shape</label>${tg('ptShape', P.shape, [['around', 'Around design'], ['circle', 'Circle'], ['oval', 'Oval'], ['rounded', 'Rounded'], ['rect', 'Rectangle'], ['shield', 'Shield']])}</div>
       <div class="row" id="ptSizeRow"><label>Size</label><input type="number" id="ptW" step="0.1" min="1" value="${P.w}" style="width:90px"> × <input type="number" id="ptH" step="0.1" min="1" value="${P.h}" style="width:90px"> in</div>
       <div class="row" id="ptMarRow"><label>Margin</label><input type="number" id="ptM" step="0.02" min="0" value="${P.margin}" style="width:90px"> in between the design and the edge</div>
-      <div class="row" id="ptFitRow"><label>Fit</label>${tg('ptFit', P.fit, [['tight', 'Tight — follows corners'], ['snug', 'Snug'], ['smooth', 'Smooth (rounded)']])}</div>
+      <div class="row" id="ptFitRow"><label>Fit</label>${tg('ptFit', P.fit, [['tight', 'Tight — goes into notches'], ['snug', 'Snug — softer'], ['smooth', 'Smooth — fills notches in']])}</div>
       <div class="row"><label>Background</label>${tg('ptBg', P.bg, [['stitch', 'Stitched (full)'], ['twill', 'Twill appliqué'], ['none', 'None (fabric)']])}</div>
       <p class="small" id="ptBgNote" style="margin:0 0 6px"></p>
       <div id="ptBgCol"><div class="row"><label>Background colour</label></div>${swRow('ptBgC', P.bgColor)}</div>
@@ -546,7 +546,9 @@
       if (!SS.design().count) { SS.toast('Add a design first, or pick a shape like Circle'); return; }
       SS.busy(true);
       const big = L => L.length ? L.reduce((x, y) => Math.abs(T.area(y)) > Math.abs(T.area(x)) ? y : x) : null;
-      const out = P.margin * IN + bw, R = P.fit === 'smooth' ? 3 + bw : P.fit === 'snug' ? 2.2 : 0.9;   // R: how big a notch the edge bridges
+      // R rounds the inside corners of the cut line (and bridges notches narrower than 2R). A satin edge can only
+      // turn into a notch cleanly if that rounding is at least about its own width, otherwise it pinches.
+      const out = P.margin * IN + bw, R = P.fit === 'smooth' ? 3 * bw + 4 : P.fit === 'snug' ? 1.6 * bw + 1.5 : Math.max(1.2, bw * 0.95);
       edge = big(outlineLoops(objs, out, R));
       const cache = {};
       inside = k => cache[k] || (cache[k] = big(outlineLoops(objs, Math.max(0.2, out - k), R + k)) || insetLoop(edge, k));
