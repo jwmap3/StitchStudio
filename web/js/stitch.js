@@ -574,6 +574,59 @@
     }
     return P;
   }
+  // A traced corner usually comes out as 2-3 small bends close together. For mitered (sharp) borders
+  // each would get its own miter and they'd overlap, so fold short in-between segments back into one
+  // true corner where the neighbouring edges meet.
+  function mergeCorners(L, closed, minSeg) {
+    let P = L.slice(), changed = true, guard = 0;
+    const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    while (changed && guard++ < 200) {
+      changed = false; const n = P.length; if (n < (closed ? 5 : 4)) break;
+      for (let i = closed ? 0 : 1; i < (closed ? n : n - 2); i++) {
+        const a = P[(i - 1 + n) % n], b = P[i], c = P[(i + 1) % n], d = P[(i + 2) % n];
+        const sl = hyp(b, c); if (sl >= minSeg || sl < 1e-6) continue;
+        if (Math.min(hyp(a, b), hyp(c, d)) < Math.max(2 * minSeg, sl * 2.5)) continue;   // on a curve every piece is short: leave curves alone
+        if (Math.sign(cross(a, b, c)) !== Math.sign(cross(b, c, d))) continue;   // an S-bend, not one corner
+        // intersect line a-b with line c-d
+        const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]], den = r[0] * s[1] - r[1] * s[0];
+        if (Math.abs(den) < 1e-9) continue;
+        const t2 = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den, X = [a[0] + r[0] * t2, a[1] + r[1] * t2];
+        const mid = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2];
+        if (hyp(X, mid) > minSeg * 2.5 || t2 < 0.5) continue;
+        P[i] = X; P.splice((i + 1) % n, 1); changed = true; break;
+      }
+    }
+    return P;
+  }
+  // Corner-cutting smoothing that leaves real corners (turn > maxTurn) exactly where they are.
+  S.cornerSmooth = function (L, maxTurn, iters) {
+    let P = L.slice();
+    // straighten tiny Z-jogs (a short piece that turns one way then straight back) — a real patch edge wouldn't follow them
+    for (let pass = 0; pass < 3; pass++) {
+      const n = P.length; if (n < 6) break; let hit = false;
+      for (let i = 0; i < n; i++) {
+        const a = P[(i - 1 + n) % n], b = P[i], c = P[(i + 1) % n], d = P[(i + 2) % n];
+        if (hyp(b, c) > 1.4) continue;
+        const cr1 = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]), cr2 = (c[0] - b[0]) * (d[1] - c[1]) - (c[1] - b[1]) * (d[0] - c[0]);
+        if (cr1 * cr2 >= 0) continue;
+        const m = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2]; P[i] = m; P.splice((i + 1) % n, 1); hit = true; break;
+      }
+      if (!hit) break;
+    }
+    for (let it = 0; it < (iters || 2); it++) {
+      const n = P.length, out = [];
+      for (let i = 0; i < n; i++) {
+        const a = P[(i - 1 + n) % n], v = P[i], c = P[(i + 1) % n];
+        const d1 = [v[0] - a[0], v[1] - a[1]], d2 = [c[0] - v[0], c[1] - v[1]], l1 = Math.hypot(...d1), l2 = Math.hypot(...d2);
+        const turn = l1 && l2 ? Math.acos(Math.max(-1, Math.min(1, (d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)))) : 0;
+        if (turn > maxTurn) { out.push(v); continue; }
+        const k1 = Math.min(0.25, 4 / Math.max(l1, 1e-6)), k2 = Math.min(0.25, 4 / Math.max(l2, 1e-6));   // cut at most 4 mm per side
+        out.push([v[0] - d1[0] * k1, v[1] - d1[1] * k1], [v[0] + d2[0] * k2, v[1] + d2[1] * k2]);
+      }
+      P = out;
+    }
+    return P;
+  };
   S.zigFill = (l, a, sp, pc) => zigFill(l, a, sp, pc);
   S.despur = despur;
   S.edgePairs = function (loop0, o) {
@@ -585,6 +638,7 @@
     if (closed && L.length > 2 && hyp(L[0], L[L.length - 1]) < 0.08) L.pop();
     L = closed ? simplifyPts(L.concat([L[0]]), o.tol || 0.09, true) : simplifyPts(L, o.tol || 0.09, false);
     L = despur(L, closed, Math.max(1.2, Math.min(4, Math.max(Math.abs(o.lo), Math.abs(o.hi)))));
+    if (corners === 'sharp') L = mergeCorners(L, closed, Math.max(0.6, (o.hi - o.lo) * 0.75));
     const n = L.length;
     if (n < (closed ? 3 : 2)) return [];
     const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
@@ -606,6 +660,30 @@
       nb = nbl < 1e-6 ? n1 : [nb[0] / nbl, nb[1] / nbl];
       const cosH = Math.max(0.2, Math.cos(th / 2));
       if (Math.abs(th) < 0.42) { push(P(v, nb, lo / cosH), P(v, nb, hi / cosH)); continue; }
+      // SHARP = a real mitered corner: stitches stay square to each side and meet along the
+      // corner's diagonal (no fan, no pinch). Very acute corners fall back to a pivot.
+      if (corners === 'sharp' && Math.abs(th) > 0.6 && Math.cos(th / 2) > 0.12) {
+        let g = [d1[0] + d2[0], d1[1] + d2[1]]; const gl = Math.hypot(g[0], g[1]);
+        if (gl > 1e-3) {
+          g = [g[0] / gl, g[1] / gl];
+          const room1 = segLen((i - 1 + n) % n) * 0.45, room2 = segLen(i) * 0.45;
+          const Fm = Math.max(Math.abs(lo), Math.abs(hi)) * 1.2 / Math.max(0.12, Math.cos(th / 2)) + 0.3, st = 0.3;
+          const clip = (F, nn, sgn) => {   // stitch F + nn*u, keep the part with sgn*dot(X - v, g) <= 0
+            const a0 = sgn * ((F[0] - v[0]) * g[0] + (F[1] - v[1]) * g[1]), b0 = sgn * (nn[0] * g[0] + nn[1] * g[1]);
+            let u0 = lo, u1 = hi;
+            if (b0 > 1e-9) u1 = Math.min(u1, -a0 / b0); else if (b0 < -1e-9) u0 = Math.max(u0, -a0 / b0); else if (a0 > 0) return null;
+            // miter limit: an over-long tip (very sharp corner) is cut square across, 2x the width out
+            const lim = (h, sg) => { const cap = Math.abs(h) * 2.0, e = [nb[0] * sg, nb[1] * sg], c0 = (F[0] - v[0]) * e[0] + (F[1] - v[1]) * e[1], c1 = nn[0] * e[0] + nn[1] * e[1];
+              if (c1 > 1e-9) u1 = Math.min(u1, (cap - c0) / c1); else if (c1 < -1e-9) u0 = Math.max(u0, (cap - c0) / c1); };
+            if (Math.abs(hi) > 0.5) lim(hi, Math.sign(hi)); if (Math.abs(lo) > 0.5) lim(lo, Math.sign(lo));
+            if (u1 - u0 < 0.25) return null;
+            const pr = [P(F, nn, u0), P(F, nn, u1)]; pr.m = true; return pr;
+          };
+          for (let f = Math.min(room1, Fm); f >= -Fm; f -= st) { const pr = clip([v[0] - d1[0] * f, v[1] - d1[1] * f], n1, 1); if (pr) pairs.push(pr); }
+          for (let f = -Fm; f <= Math.min(room2, Fm); f += st) { const pr = clip([v[0] + d2[0] * f, v[1] + d2[1] * f], n2, -1); if (pr) pairs.push(pr); }
+          continue;
+        }
+      }
       // which side is on the outside of this turn? cross(d1,d2) vs side
       const cr = d1[0] * d2[1] - d1[1] * d2[0];
       const hiOut = cr * side < 0;                  // the +normal side is convex here
@@ -658,7 +736,7 @@
     const m = pairs.length;
     [[0, lo], [1, hi]].forEach(([side, h]) => {
       const H = Math.abs(h); if (H < 0.6 || m < 3) return;
-      const bad = pairs.map(pr => dist(pr[side], H) < H * 0.8);
+      const bad = pairs.map(pr => !pr.m && dist(pr[side], H) < H * 0.8);   // mitered corners sit closer on purpose
       if (!bad.some(x => x) || bad.every(x => x)) return;
       // walk runs of bad points (wrapping for closed loops), pin each run
       const start = closed ? bad.findIndex((x, i) => !x && bad[(i + 1) % m]) : -1;

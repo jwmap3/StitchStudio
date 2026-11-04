@@ -457,7 +457,7 @@
   const FAVC = () => { try { const v = JSON.parse(localStorage.getItem('ss_favs')); if (Array.isArray(v)) return v; } catch (e) {} return ['#000000', '#ffffff', '#c8102e', '#f2a900', '#0b2a5b', '#e35205', '#7a7a7a']; };
   const PALETTE = () => [...new Set(FAVC().concat(['#000000', '#ffffff', '#0b2a5b', '#1f3a93', '#c8102e', '#8b0f14', '#f2a900', '#ffd23f', '#2e7d32', '#7a7a7a', '#c0c0c0', '#e35205']))];
   // union of everything stitched (or given layers) -> loops offset outward by `off` mm, inside corners rounded by `round` mm
-  function outlineLoops(objs, off, round) {
+  function outlineLoops(objs, off, round, sharp) {
     const PX = 10, list = SS.expand(objs).filter(o => !o.hidden);
     let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
     const P = list.map(o => SS.pieces(o));
@@ -474,14 +474,32 @@
     const outer = loops => { if (!loops.length) return loops; const ar = loops.map(l => T.area(l)); const big = ar.reduce((i, v, k) => Math.abs(v) > Math.abs(ar[i]) ? k : i, 0); const sg = Math.sign(ar[big]); return loops.filter((l, k) => Math.sign(ar[k]) === sg && Math.abs(ar[k]) > 4 * PX * PX); };
     const paint = (loops, lw, erase) => { g.globalCompositeOperation = erase ? 'destination-out' : 'source-over'; g.lineWidth = lw; g.beginPath(); loops.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); if (!erase) g.fill('nonzero'); g.stroke(); g.globalCompositeOperation = 'source-over'; };
     // solid silhouette (holes filled), grown by off + round, shrunk by round
-    let L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h); paint(L, 2 * (off + round) * PX, false);
+    let L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h);
+    if (sharp) { g.lineJoin = 'miter'; g.miterLimit = 3; }   // grow without rounding the corners off
+    paint(L, 2 * (off + round) * PX, false); g.lineJoin = 'round';
     L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h); g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
     if (round > 0) paint(L, 2 * round * PX, true);
     L = outer(T.contours(grab(), w, h));
+    if (sharp && L.length) {
+      // EXACT keeps the real outline, but bridges deep narrow inlets (gaps BETWEEN parts of the design, e.g.
+      // the wedges between a flag and a cross arm) the way a real cut patch would. Found by closing with a
+      // big disc and keeping only the long, thin pieces it adds (not the small fillets in real corners).
+      const M0 = grab(), Rb = 4 * PX;
+      g.clearRect(0, 0, w, h); g.lineJoin = 'round'; g.lineWidth = 2 * Rb; g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero'); g.stroke();
+      const C1 = outer(T.contours(grab(), w, h));
+      g.clearRect(0, 0, w, h); g.beginPath(); C1.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
+      g.globalCompositeOperation = 'destination-out'; g.stroke(); g.globalCompositeOperation = 'source-over';
+      const Mc = grab(), D = new Uint8Array(w * h); for (let k = 0; k < w * h; k++) D[k] = Mc[k] && !M0[k] ? 1 : 0;
+      const inlets = T.contours(D, w, h).filter(l => { if (Math.abs(T.area(l)) < 2 * PX * PX) return false; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; l.forEach(q => { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }); return Math.hypot(x1 - x0, y1 - y0) > 3.2 * Rb; });
+      g.clearRect(0, 0, w, h); g.lineJoin = 'miter'; g.lineWidth = 2;
+      g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
+      if (inlets.length) { g.beginPath(); inlets.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero'); g.stroke(); }
+      L = outer(T.contours(grab(), w, h)); g.lineJoin = 'round';
+    }
     // smooth, then drop thin thorns / doubled-back zig-zags the smoothing can leave at sharp corners
     // smooth with corner-cutting (can't tie little knots or thorns at sharp corners), then drop any doubled-back bits
     const chaikin = P => { let Q = P; for (let it = 0; it < 2; it++) { const R = []; for (let i = 0; i < Q.length; i++) { const p0 = Q[i], p1 = Q[(i + 1) % Q.length]; R.push([p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25], [p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75]); } Q = R; } return Q; };
-    return L.map(l => Stitch.despur(chaikin(T.simplify(l, 1.3)).map(q => [a + q[0] / PX, b + q[1] / PX]), true, 2.5));
+    return L.map(l => Stitch.despur((sharp ? Stitch.cornerSmooth(T.simplify(l, 0.25 * PX), 0.6, 3) : chaikin(T.simplify(l, 1.3))).map(q => [a + q[0] / PX, b + q[1] / PX]), true, sharp ? 1.2 : 2.5));
   }
   function shapeLoop(kind, cx, cy, W, H) {
     const pts = [], N = 160;
@@ -513,7 +531,7 @@
   const tg = (id, val, opts) => `<div class="toggle" id="${id}">${opts.map(([v, l]) => `<button data-v="${v}" class="${String(v) === String(val) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   function bindTg(id, fn) { const el = $('#' + id); el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { el.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); fn(b.dataset.v); })); }
 
-  const patch = { shape: 'around', fit: 'tight', w: 3.5, h: 3.5, margin: 0.1, bg: 'stitch', bgColor: '#0b2a5b', border: 4, borderColor: '#f2a900', density: 0.42 };
+  const patch = { shape: 'around', fit: 'exact', w: 3.5, h: 3.5, margin: 0, bg: 'stitch', bgColor: '#0b2a5b', border: 4, borderColor: '#f2a900', density: 0.42 };
   function patchModal() {
     const ds = SS.design(), has = ds.count > 0;
     if (has && patch.shape !== 'around') { const b = ds.bounds; patch.w = +((b[2] - b[0]) / IN + 0.6).toFixed(2); patch.h = +((b[3] - b[1]) / IN + 0.6).toFixed(2); }
@@ -523,7 +541,7 @@
       <div class="row"><label>Shape</label>${tg('ptShape', P.shape, [['around', 'Around design'], ['circle', 'Circle'], ['oval', 'Oval'], ['rounded', 'Rounded'], ['rect', 'Rectangle'], ['shield', 'Shield']])}</div>
       <div class="row" id="ptSizeRow"><label>Size</label><input type="number" id="ptW" step="0.1" min="1" value="${P.w}" style="width:90px"> × <input type="number" id="ptH" step="0.1" min="1" value="${P.h}" style="width:90px"> in</div>
       <div class="row" id="ptMarRow"><label>Margin</label><input type="number" id="ptM" step="0.02" min="0" value="${P.margin}" style="width:90px"> in between the design and the edge</div>
-      <div class="row" id="ptFitRow"><label>Fit</label>${tg('ptFit', P.fit, [['tight', 'Tight — goes into notches'], ['snug', 'Snug — softer'], ['smooth', 'Smooth — fills notches in']])}</div>
+      <div class="row" id="ptFitRow"><label>Fit</label>${tg('ptFit', P.fit, [['exact', 'Exact — the design’s own shape'], ['tight', 'Tight'], ['snug', 'Snug'], ['smooth', 'Smooth — fills notches']])}</div>
       <div class="row"><label>Background</label>${tg('ptBg', P.bg, [['stitch', 'Stitched (full)'], ['twill', 'Twill appliqué'], ['none', 'None (fabric)']])}</div>
       <p class="small" id="ptBgNote" style="margin:0 0 6px"></p>
       <div id="ptBgCol"><div class="row"><label>Background colour</label></div>${swRow('ptBgC', P.bgColor)}</div>
@@ -548,10 +566,13 @@
       const big = L => L.length ? L.reduce((x, y) => Math.abs(T.area(y)) > Math.abs(T.area(x)) ? y : x) : null;
       // R rounds the inside corners of the cut line (and bridges notches narrower than 2R). A satin edge can only
       // turn into a notch cleanly if that rounding is at least about its own width, otherwise it pinches.
-      const out = P.margin * IN + bw, R = P.fit === 'smooth' ? 3 * bw + 4 : P.fit === 'snug' ? 1.6 * bw + 1.5 : Math.max(1.2, bw * 0.95);
-      edge = big(outlineLoops(objs, out, R));
+      // EXACT: the cut line is the design's own outline (grown just enough that the satin edge covers its outer
+      // 1 mm, like a real patch border), sharp corners kept sharp, and the edge mitered at every corner.
+      const exact = P.fit === 'exact';
+      const out = exact ? Math.max(0.4, bw - 1) + P.margin * IN : P.margin * IN + bw, R = exact ? 0.3 : P.fit === 'smooth' ? 3 * bw + 4 : P.fit === 'snug' ? 1.6 * bw + 1.5 : Math.max(1.2, bw * 0.95);
+      edge = big(outlineLoops(objs, out, R, exact));
       const cache = {};
-      inside = k => cache[k] || (cache[k] = big(outlineLoops(objs, Math.max(0.2, out - k), R + k)) || insetLoop(edge, k));
+      inside = k => cache[k] || (cache[k] = big(outlineLoops(objs, Math.max(0.2, out - k), R + k, exact)) || insetLoop(edge, k));
       SS.busy(false);
       if (!edge) { SS.toast('Could not find the design outline'); return; }
     } else {
@@ -574,7 +595,7 @@
       );
     }
     // satin edge: from the cut line inwards, clean pivot corners (adjustable later like any border)
-    const eo = SS.edgeBorderObj(edge, [edge], { w: bw, place: 'in', gap: 0, corners: 'round' }, P.borderColor, 'Patch edge');
+    const eo = SS.edgeBorderObj(edge, [edge], { w: bw, place: 'in', gap: 0, corners: P.fit === 'exact' ? 'sharp' : 'round' }, P.borderColor, 'Patch edge');
     d.objects.push(mk(Object.assign(eo, { pullComp: 0.15, threadName: 'Patch edge', stopBefore: P.bg === 'twill' })));
     SS.commit(); SS.select(added[added.length - 1].id); SS.draw();
     const bb = loopBox(edge);
