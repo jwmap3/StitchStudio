@@ -35,7 +35,7 @@ Phone-first embroidery digitizer. Trace an image into stitches by hand or automa
 - **Thread chart & My threads**: every colour picker has "All 60 threads" with names, plus your 7 personal quick-access threads (set them in Pick → My threads → Edit). In Pick, tap one of your threads to stitch new picks in it.
 - **Set sew order by clicking** (PC: hold **V**, click layers on the design or in the Layers list in the order they should sew, release V; phone: Layers → 🔢 Tap order → tap → ✓ Done). Numbered badges show the order; layers you don't click keep their place. A quick tap of V is still the Select tool.
 - **Move several layers at once**: highlight them (Ctrl+click on PC, Pick many on phone), then drag any of them, or arrow-key nudge, and they all move together.
-- **Solo several layers**: hold **I** and click layers (on the design or in the list), let go, and only those show (phone: Layers → ◎ Tap to solo). Right-click a Ctrl+clicked group → ◎ Solo these.
+- **Solo shapes**: hold **I** and click single shapes on the design (just that piece of a colour, not the whole colour layer); let go and only those show. Picked pieces come out into their own layer (pieces from the same colour go together, sewn right after it); Ctrl+Z puts them back. Clicking a row in the Layers list picks the whole layer. Phone: Layers → ◎ Tap to solo. Right-click a Ctrl+clicked group → ◎ Solo these.
 - **Layers**: sew order, hide/show. Per-object angle, density, stitch length, pull compensation, underlay.
 - **Realistic thread view** while you edit (sheen by stitch direction, shadows, fabric texture; toggle in the header) and **Preview** with sew-out slider, fabric colours, stitch count, trims, colours, time.
 

@@ -85,16 +85,82 @@
     const list = orderList.slice(); orderMode = false; orderList = []; hint('');
     if (list.length >= 2) applyOrder(list); else { draw(); if (list.length === 1) toast('Pick at least 2 layers to set an order'); }
   }
+  // ---- solo picked SHAPES: click single pieces (one letter, one blob of a colour); on release they
+  // come out of their layers (picked pieces of the same layer go together) and only they show
+  let isoPicks = [];   // { id, k: outer-loop index | 'b'+block | 'all', loops: [loop indexes] }
+  function pieceAt(o, p) {
+    if (o.type === 'fill') {
+      const idx = o.paths.map((l, i) => i).filter(i => o.paths[i].length >= 3);
+      if (idx.length < 2) return null;
+      const area = l => { let a = 0; for (let i = 0; i < l.length; i++) { const q = l[i], r = l[(i + 1) % l.length]; a += q[0] * r[1] - r[0] * q[1]; } return Math.abs(a / 2); };
+      const inside = (q, l) => S.pointIn(q, [l]);
+      const depth = {}; idx.forEach(i => { depth[i] = idx.reduce((d, j) => d + (j !== i && inside(o.paths[i][0], o.paths[j]) ? 1 : 0), 0); });
+      let best = -1;
+      idx.forEach(i => { if (depth[i] % 2 === 0 && inside(p, o.paths[i]) && (best < 0 || area(o.paths[i]) < area(o.paths[best]))) best = i; });
+      if (best < 0) { let bd = Infinity; idx.forEach(i => { if (depth[i] % 2) return; o.paths[i].forEach(q => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = i; } }); }); if (bd > 6) return null; }
+      const loops = [best].concat(idx.filter(i => i !== best && depth[i] === depth[best] + 1 && inside(o.paths[i][0], o.paths[best])));
+      if (loops.length === idx.length) return null;
+      return { k: best, loops };
+    }
+    if (o.type === 'import' && o.blocks && o.blocks.length > 1) {
+      let bi = -1, bd = Infinity;
+      o.blocks.forEach((bl, i) => bl.lines.forEach(l => l.forEach(q => { const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2; if (d < bd) { bd = d; bi = i; } })));
+      return bi >= 0 && bd <= 25 ? { k: 'b' + bi, block: bi } : null;
+    }
+    return null;
+  }
+  function isoSync() {
+    orderList = [...new Set(isoPicks.map(x => x.id))];
+    const n = isoPicks.length;
+    hint(n ? `Picked ${n} shape${n > 1 ? 's' : ''} — let go to show only ${n > 1 ? 'them' : 'it'}` : 'Click the shapes to keep showing — the rest hide when you let go');
+    draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { }
+  }
+  function isoToggle(o, p) {
+    const pc = p ? pieceAt(o, p) : null, k = pc ? pc.k : 'all';
+    const at = isoPicks.findIndex(x => x.id === o.id && x.k === k);
+    if (at >= 0) isoPicks.splice(at, 1);
+    else {
+      isoPicks = isoPicks.filter(x => !(x.id === o.id && (k === 'all' || x.k === 'all')));
+      isoPicks.push(Object.assign({ id: o.id, k }, pc || {}));
+    }
+    isoSync();
+  }
   function setIsoMode(on) {
-    if (on) { orderMode = true; pickKind = 'iso'; orderList = []; hint('Click the layers to keep showing — the rest hide when you let go'); draw(); return; }
-    const list = orderList.slice(); orderMode = false; orderList = []; pickKind = 'order'; hint('');
-    if (list.length) { setSoloMany(list); toast(`Showing only ${list.length} layer${list.length > 1 ? 's' : ''} — Show all (top bar) brings the rest back`); } else draw();
+    if (on) { orderMode = true; pickKind = 'iso'; orderList = []; isoPicks = []; hint('Click the shapes to keep showing — the rest hide when you let go'); draw(); return; }
+    const picks = isoPicks.slice(); orderMode = false; orderList = []; isoPicks = []; pickKind = 'order'; hint('');
+    if (!picks.length) { draw(); return; }
+    const out = [], ids = [...new Set(picks.map(x => x.id))]; let split = 0;
+    ids.forEach(id => {
+      const o = doc.objects.find(x => x.id === id); if (!o) return;
+      const mine = picks.filter(x => x.id === id);
+      if (mine.some(x => x.k === 'all')) { out.push(id); return; }
+      const at = doc.objects.indexOf(o);
+      if (o.type === 'fill') {
+        const take = new Set(mine.flatMap(x => x.loops));
+        const live = o.paths.filter(l => l.length >= 3).length;
+        if (take.size >= live) { out.push(id); return; }
+        const c = JSON.parse(JSON.stringify(o)); delete c.id; delete c.flow; c.auto = false;
+        c.paths = o.paths.filter((l, i) => take.has(i)).map(l => JSON.parse(JSON.stringify(l)));
+        c.name = (o.name || 'Fill').replace(/ \(part.*\)$/, '') + (mine.length > 1 ? ' (parts)' : ' (part)');
+        o.paths = o.paths.filter((l, i) => !take.has(i));
+        c.id = doc.nextId++; doc.objects.splice(at + 1, 0, c); out.push(c.id); split++;
+      } else if (o.type === 'import') {
+        const take = new Set(mine.map(x => x.block));
+        if (take.size >= o.blocks.length) { out.push(id); return; }
+        const c = { type: 'import', name: (o.name || 'import') + ' (picked colours)', blocks: o.blocks.filter((b, i) => take.has(i)).map(b => JSON.parse(JSON.stringify(b))), scaleK: o.scaleK };
+        o.blocks = o.blocks.filter((b, i) => !take.has(i));
+        c.id = doc.nextId++; doc.objects.splice(at + 1, 0, c); out.push(c.id); split++;
+      } else out.push(id);
+    });
+    if (split) commit();
+    setSoloMany(out);
+    toast(`Showing only the ${picks.length} shape${picks.length > 1 ? 's' : ''} you picked${split ? ` (split into ${split} new layer${split > 1 ? 's' : ''}, same colour, sewn right after their colour)` : ''} — Show all brings the rest back${split ? ', Ctrl+Z puts the pieces back' : ''}`);
   }
   function orderToggle(id) {
     if (!orderMode) return;
+    if (pickKind === 'iso') { const o = doc.objects.find(x => x.id === id); if (o) isoToggle(o, null); return; }
     const k = orderList.indexOf(id);
     if (k >= 0) orderList.splice(k, 1); else orderList.push(id);
-    if (pickKind === 'iso') { hint(orderList.length ? `Keep showing: ${orderList.length} layer${orderList.length > 1 ? 's' : ''}` : 'Click the layers to keep showing'); draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { } return; }
     hint(orderList.length ? `Sew order: ${orderList.map((x, i) => (i + 1) + ' ' + ((doc.objects.find(o => o.id === x) || {}).name || '')).join(' → ')}` : 'Click layers in the order they should sew — first to last');
     draw(); if (window.onSSOrder) try { window.onSSOrder(orderList); } catch (e) { }
   }
@@ -461,6 +527,26 @@
   }
   function drawOrder() {
     if (!orderMode) return;
+    if (pickKind === 'iso') {
+      ctx.save(); ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      isoPicks.forEach(pk => {
+        const o = doc.objects.find(x => x.id === pk.id); if (!o) return;
+        let bb;
+        if (o.type === 'fill' && pk.loops) {
+          ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 3; ctx.fillStyle = 'rgba(76,194,255,0.22)'; ctx.beginPath();
+          pk.loops.forEach(li => { o.paths[li].forEach((q, k) => { const [x, y] = toPX(q); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); });
+          ctx.fill('evenodd'); ctx.stroke();
+          const L = o.paths[pk.k]; bb = [Math.min(...L.map(q => q[0])), Math.min(...L.map(q => q[1])), Math.max(...L.map(q => q[0])), Math.max(...L.map(q => q[1]))];
+        } else if (o.type === 'import' && pk.block != null) {
+          const pts = o.blocks[pk.block].lines.flat(); bb = [Math.min(...pts.map(q => q[0])), Math.min(...pts.map(q => q[1])), Math.max(...pts.map(q => q[0])), Math.max(...pts.map(q => q[1]))];
+        } else bb = bbox(o);
+        if (!bb) return;
+        const [a, b] = toPX([bb[0], bb[1]]), [c, d] = toPX([bb[2], bb[3]]);
+        if (!(o.type === 'fill' && pk.loops)) { ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(a - 3, b - 3, c - a + 6, d - b + 6); ctx.setLineDash([]); }
+        ctx.fillStyle = '#4cc2ff'; ctx.beginPath(); ctx.arc((a + c) / 2, (b + d) / 2, 12, 0, 7); ctx.fill(); ctx.fillStyle = '#16181d'; ctx.fillText('◎', (a + c) / 2, (b + d) / 2 + 1);
+      });
+      ctx.restore(); return;
+    }
     ctx.save(); ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     orderList.forEach((id, i) => {
       const o = doc.objects.find(x => x.id === id), bb = o && bbox(o); if (!bb) return;
@@ -1024,7 +1110,7 @@
     }
     const p = toMM(e.offsetX, e.offsetY);
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
-    if (orderMode && !preview) { const h = hitObject(p); gesture = null; if (h) orderToggle(h.id); return; }
+    if (orderMode && !preview) { const h = hitObject(p); gesture = null; if (h) { if (pickKind === 'iso') isoToggle(h, p); else orderToggle(h.id); } return; }
     if (secArm && !preview) { gesture = null; secTap(p); return; }
     if (persp && !preview) { const k = persp.pts.findIndex(q => { const [x, y] = toPX(q); return Math.hypot(x - e.offsetX, y - e.offsetY) < 24; }); if (k >= 0) { gesture.type = 'perspnode'; gesture.k = k; return; } }
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
@@ -2922,7 +3008,7 @@
 
   function renderLayers() {
     if (!doc.objects.length && !doc.bg) { mount(['<div class="sec"><h3>Sew order</h3><p class="small">No shapes yet.</p></div>']); return; }
-    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lOrder', orderMode && pickKind === 'order' ? `✓ Done (${orderList.length})` : '🔢 Tap order', orderMode && pickKind === 'order' ? 'primary' : '')}${btn('lIso', orderMode && pickKind === 'iso' ? `✓ Show only (${orderList.length})` : (solo != null ? '👁 Show all' : '◎ Tap to solo'), orderMode && pickKind === 'iso' ? 'primary' : '')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
+    const parts = [`<div class="sec"><h3>Sew order (top sews first)</h3><div class="btns" style="margin:0 0 8px">${btn('lSelAll', '☑ Select all')}${btn('lOrder', orderMode && pickKind === 'order' ? `✓ Done (${orderList.length})` : '🔢 Tap order', orderMode && pickKind === 'order' ? 'primary' : '')}${btn('lIso', orderMode && pickKind === 'iso' ? `✓ Show only (${isoPicks.length})` : (solo != null ? '👁 Show all' : '◎ Tap to solo'), orderMode && pickKind === 'iso' ? 'primary' : '')}${btn('lPickMany', pickMany ? `✓ Done (${multi.size} picked)` : '☐ Pick several', pickMany ? 'primary' : '')}</div>${pickMany ? '<p class="small" style="margin:0 0 8px">Tap layers to tick them, then Done to change them together.</p>' : ''}`];
     doc.objects.forEach((o, i) => {
       const P = expand([o]).flatMap(pieces); let n = 0; P.forEach(p => n += p.pts.length);
       const dotBg = o.type === 'import' ? `conic-gradient(${o.blocks.map((bl, k) => `${bl.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
@@ -2935,7 +3021,7 @@
     parts.push('</div>');
     mount(parts);
     on('lSelAll', () => { pickMany = false; selectAll(); });
-    on('lIso', () => { if (orderMode && pickKind === 'iso') { setIsoMode(false); renderLayers(); return; } if (solo != null) { setSolo(null); renderLayers(); return; } if (orderMode) setOrderMode(false); setIsoMode(true); renderLayers(); toast('Tap the layers to keep showing (on the design or in this list), then ✓ Show only'); });
+    on('lIso', () => { if (orderMode && pickKind === 'iso') { setIsoMode(false); renderLayers(); return; } if (solo != null) { setSolo(null); renderLayers(); return; } if (orderMode) setOrderMode(false); setIsoMode(true); renderLayers(); toast('Tap the shapes to keep showing (just that piece of a colour, or a whole layer in this list), then ✓ Show only'); });
     on('lOrder', () => { if (orderMode && pickKind === 'iso') { setIsoMode(false); } if (!orderMode) { setOrderMode(true); renderLayers(); toast('Tap layers on the design (or in this list) in the order they should sew'); } else { setOrderMode(false); renderLayers(); } });
     on('lPickMany', () => {
       if (!pickMany) { pickMany = true; multi.clear(); renderLayers(); return; }
