@@ -480,7 +480,7 @@
     L = outer(T.contours(grab(), w, h)); g.clearRect(0, 0, w, h); g.beginPath(); L.forEach(l => { l.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); }); g.fill('nonzero');
     if (round > 0) paint(L, 2 * round * PX, true);
     L = outer(T.contours(grab(), w, h));
-    if (sharp && L.length) {
+    if (sharp && L.length && false) {
       // EXACT keeps the real outline, but bridges deep narrow inlets (gaps BETWEEN parts of the design, e.g.
       // the wedges between a flag and a cross arm) the way a real cut patch would. Found by closing with a
       // big disc and keeping only the long, thin pieces it adds (not the small fillets in real corners).
@@ -551,7 +551,7 @@
     const sync = () => {
       $('#ptSizeRow').style.display = P.shape === 'around' ? 'none' : ''; $('#ptMarRow').style.display = $('#ptFitRow').style.display = P.shape === 'around' ? '' : 'none';
       $('#ptBgCol').style.display = P.bg === 'none' ? 'none' : '';
-      $('#ptBgNote').textContent = P.bg === 'stitch' ? 'Whole patch is filled with thread (classic embroidered patch).' : P.bg === 'twill' ? 'Machine sews a placement line and STOPS: lay twill fabric over it, continue; it tacks it down and stops again so you can trim close, then sews the design and edge. Fewer stitches, faster.' : 'Design and edge only, straight onto the garment or patch fabric.';
+      $('#ptBgNote').textContent = P.bg === 'stitch' ? (P.shape === 'around' && P.fit === 'exact' ? 'With Fit: Exact the edge wraps the design itself, so no filler is added.' : 'Whole patch is filled with thread (classic embroidered patch).') : P.bg === 'twill' ? 'Machine sews a placement line and STOPS: lay twill fabric over it, continue; it tacks it down and stops again so you can trim close, then sews the design and edge. Fewer stitches, faster.' : 'Design and edge only, straight onto the garment or patch fabric.';
     };
     bindTg('ptShape', v => { P.shape = v; sync(); }); bindTg('ptFit', v => P.fit = v); bindTg('ptBg', v => { P.bg = v; sync(); }); bindTg('ptB', v => P.border = +v);
     bindSw('ptBgC', c => P.bgColor = c); bindSw('ptBC', c => P.borderColor = c); sync();
@@ -569,7 +569,7 @@
       // EXACT: the cut line is the design's own outline (grown just enough that the satin edge covers its outer
       // 1 mm, like a real patch border), sharp corners kept sharp, and the edge mitered at every corner.
       const exact = P.fit === 'exact';
-      const out = exact ? Math.max(0.4, bw - 1) + P.margin * IN : P.margin * IN + bw, R = exact ? 0.3 : P.fit === 'smooth' ? 3 * bw + 4 : P.fit === 'snug' ? 1.6 * bw + 1.5 : Math.max(1.2, bw * 0.95);
+      const out = exact ? Math.max(0.3, bw - 1.2) + P.margin * IN : P.margin * IN + bw, R = exact ? 0.3 : P.fit === 'smooth' ? 3 * bw + 4 : P.fit === 'snug' ? 1.6 * bw + 1.5 : Math.max(1.2, bw * 0.95);
       edge = big(outlineLoops(objs, out, R, exact));
       const cache = {};
       inside = k => cache[k] || (cache[k] = big(outlineLoops(objs, Math.max(0.2, out - k), R + k, exact)) || insetLoop(edge, k));
@@ -584,7 +584,7 @@
     const mk = o => { const id = d.nextId++; o.id = id; added.push(o); return o; };
     // satin edge: centre line half the edge width inside the cut line
     const centre = inside(bw / 2);
-    if (P.bg === 'stitch') {
+    if (P.bg === 'stitch' && !(P.shape === 'around' && P.fit === 'exact')) {
       d.objects.unshift(mk({ type: 'fill', name: 'Patch background', paths: [inside(bw * 0.4)], angle: 45, spacing: P.density, stitchLen: 3.5, underlay: true, pullComp: 0.15, color: P.bgColor }));
     } else if (P.bg === 'twill') {
       const tack = inside(bw * 0.45);
