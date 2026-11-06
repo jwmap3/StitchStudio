@@ -711,7 +711,7 @@
     let segs = 0, stN = 0, limitSeg = null;
     for (const s2 of d.stitches) {
       if (s2.c === 3) { ci++; newLayer(); continue; }
-      if (s2.c === 0) { if (!line) { line = []; cur.lines.push(line); } else segs++; line.push([s2.x, s2.y]); stN++; if (nm && stN === nm.total && limitSeg == null) limitSeg = segs; }
+      if (s2.c === 0) { if (!line) { line = []; cur.lines.push(line); } else segs++; line.push([s2.x, s2.y]); stN++; if (nm && stN === nm.rawN && limitSeg == null) limitSeg = segs; }
       else { line = [[s2.x, s2.y]]; cur.lines.push(line); }
     }
     Render.draw(ctx, layers, view, { thread: 0.46, limit: nm && limitSeg != null ? limitSeg : Math.round(d.count * progress) });
@@ -721,27 +721,41 @@
   // jumps aren't counted). Mode 'all' = counted over the whole design, 'col' = counted within one thread colour.
   let needleMark = null;   // { n, mode: 'all'|'col', col }
   const needleMode = { mode: 'col', col: 0 };   // like the Topaz screen: colour block, then stitch # within it
-  function needleInfo(d, m) {
-    const st = d.stitches, colTot = [0]; let ci = 0;
-    for (const s2 of st) { if (s2.c === 3) { ci++; colTot[ci] = 0; } else if (s2.c === 0) colTot[ci]++; }
-    const ncol = colTot.length;
-    let want = Math.max(1, Math.round(m.n)), wantCol = m.mode === 'col' ? Math.max(0, Math.min(ncol - 1, m.col || 0)) : -1;
-    if (wantCol >= 0) want = Math.min(want, colTot[wantCol] || 1); else want = Math.min(want, d.count || 1);
-    let total = 0, inCol = 0, c2 = 0, hit = -1, last = null;
+  // Machine-style numbering. The machine sews a few securing (tie) stitches every time it starts a section
+  // and before each trim / colour change, and counts them. doc.tieK = securing stitches per tie (calibrated
+  // from the machine's total for a colour; can be negative if the machine doesn't count the file's own ties).
+  function machineCount(d, k) {
+    k = k || 0;
+    const st = d.stitches, list = [], colTot = [0], ties = [0];
+    let ci = 0, inC = 0, tot = 0, open = false;
+    const tie = () => { inC += k; tot += k; ties[ci]++; };
     for (let i = 0; i < st.length; i++) {
       const s2 = st[i];
-      if (s2.c === 3) { c2++; inCol = 0; continue; }
-      if (s2.c !== 0) continue;
-      total++; inCol++;
-      if ((wantCol < 0 && total === want) || (wantCol === c2 && inCol === want)) { hit = i; break; }
+      if (s2.c === 0) { if (!open) { tie(); open = true; } inC++; tot++; list.push({ i, col: ci, inC, tot }); }
+      else if (s2.c === 2) { if (open) tie(); open = false; }
+      else if (s2.c === 3) { if (open) tie(); open = false; colTot[ci] = inC; ci++; inC = 0; colTot[ci] = 0; ties[ci] = 0; }
+      else if (s2.c === 4) { if (open) tie(); open = false; }
     }
-    if (hit < 0) return null;
-    const p = st[hit];
+    colTot[ci] = inC;
+    return { list, colTot, ties, total: tot };
+  }
+  function needleInfo(d, m) {
+    const k = doc.tieK || 0, MC = machineCount(d, k), st = d.stitches, ncol = MC.colTot.length;
+    const wantCol = m.mode === 'col' ? Math.max(0, Math.min(ncol - 1, m.col || 0)) : -1;
+    let want = Math.max(1, Math.round(m.n));
+    want = Math.min(want, wantCol >= 0 ? (MC.colTot[wantCol] || 1) : (MC.total || 1));
+    // first real stitch whose machine number reaches the wanted one (a number inside a tie = the spot the tie sews on)
+    let e = null;
+    for (const x of MC.list) { if (wantCol >= 0 ? (x.col === wantCol && x.inC >= want) : x.tot >= want) { e = x; break; } }
+    if (!e) e = MC.list.filter(x => wantCol < 0 || x.col === wantCol).pop();
+    if (!e) return null;
+    const hit = e.i, p = st[hit];
     let prev = null, next = null, jumpNext = false;
     for (let i = hit - 1; i >= 0; i--) { if (st[i].c === 0 && Math.hypot(st[i].x - p.x, st[i].y - p.y) > 0.05) { prev = st[i]; break; } if (st[i].c !== 0) break; }
     for (let i = hit + 1; i < st.length; i++) { if (st[i].c === 0) { if (Math.hypot(st[i].x - p.x, st[i].y - p.y) > 0.05) { next = st[i]; break; } } else if (st[i].c === 2 || st[i].c === 3 || st[i].c === 4) { jumpNext = st[i].c; break; } }
+    let rawN = 0; for (let i = 0; i <= hit; i++) if (st[i].c === 0) rawN++;
     const h = hoop();
-    return { x: p.x, y: p.y, total, inCol, col: c2, ncol, colCount: colTot[c2], count: d.count, color: d.colors[c2] ? d.colors[c2].color : '#000', prev, next, after: jumpNext, dx: p.x - h.w / 2, dy: p.y - h.h / 2 };
+    return { x: p.x, y: p.y, total: wantCol >= 0 ? e.tot : want, inCol: wantCol >= 0 ? want : e.inC, col: e.col, ncol, colCount: MC.colTot[e.col], count: MC.total, rawN, color: d.colors[e.col] ? d.colors[e.col].color : '#000', prev, next, after: jumpNext, dx: p.x - h.w / 2, dy: p.y - h.h / 2, ties: MC.ties[e.col] };
   }
   function drawNeedle(nm) {
     const [x, y] = toPX([nm.x, nm.y]);
@@ -3125,7 +3139,7 @@
     // Laid out like the Designer Topaz stitch-out screen:  colour block  4(12)   stitch 7427 (9429)
     const nm = needleMark && needleInfo(d, needleMark);
     const ncol = d.colors.length, col = nm ? nm.col : Math.min(needleMode.col, Math.max(0, ncol - 1));
-    const colTot = []; { let ci = 0; colTot[0] = 0; d.stitches.forEach(s2 => { if (s2.c === 3) { ci++; colTot[ci] = 0; } else if (s2.c === 0) colTot[ci]++; }); }
+    const MC = machineCount(d, doc.tieK || 0), colTot = MC.colTot;
     const cc = d.colors[col] ? d.colors[col].color : '#000';
     const isCol = needleMode.mode !== 'all';
     const html = `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin:4px 0 10px"><h3 style="margin:0 0 6px">📍 Find a stitch</h3>
@@ -3135,20 +3149,23 @@
         <button class="btn sm" id="ndCp" style="min-width:38px">+</button></div>
       <div class="row"><label>Stitch</label><input type="number" id="ndN" min="1" step="1" value="${nm ? nm.inCol : ''}" placeholder="e.g. 7427" style="width:96px;font:700 16px ui-monospace,Menlo,monospace"><span style="margin:0 6px;font:600 15px ui-monospace,Menlo,monospace;opacity:.75">(${colTot[col] || 0})</span></div>
       <div class="btns" style="margin:2px 0 4px">${btn('ndGo', 'Show where the needle is', 'primary')}</div>`
-      : `<div class="row"><label>Stitch #</label><input type="number" id="ndN" min="1" step="1" value="${nm ? nm.total : ''}" placeholder="e.g. 14282" style="width:110px;font:700 16px ui-monospace,Menlo,monospace"><span style="margin:0 6px;font:600 15px ui-monospace,Menlo,monospace;opacity:.75">(${d.count})</span></div>
+      : `<div class="row"><label>Stitch #</label><input type="number" id="ndN" min="1" step="1" value="${nm ? nm.total : ''}" placeholder="e.g. 14282" style="width:110px;font:700 16px ui-monospace,Menlo,monospace"><span style="margin:0 6px;font:600 15px ui-monospace,Menlo,monospace;opacity:.75">(${MC.total})</span></div>
       <div class="btns" style="margin:2px 0 4px">${btn('ndGo', 'Show where the needle is', 'primary')}</div>`}
       <div class="btns" style="margin:4px 0">${btn('ndM100', '−100', 'sm')}${btn('ndM10', '−10', 'sm')}${btn('ndM1', '−1', 'sm')}${btn('ndP1', '+1', 'sm')}${btn('ndP10', '+10', 'sm')}${btn('ndP100', '+100', 'sm')}${needleMark ? btn('ndZ', '🔍 Zoom to needle', 'sm') + btn('ndX', '✕ Clear', 'sm') : ''}</div>
       ${nm ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#e9efe6;color:#111;font:600 14px ui-monospace,Menlo,monospace;line-height:1.6">
           <div style="display:flex;justify-content:space-between"><span>▮ ${nm.col + 1}(${nm.ncol})</span><span style="opacity:.7">---${nm.total.toLocaleString('en-US').replace(/,/g, '')}</span></div>
           <div>${nm.inCol}<span style="opacity:.7"> (${nm.colCount})</span></div></div>
         <p class="small" style="margin:6px 0 0;line-height:1.5"><span class="sw" style="display:inline-block;width:12px;height:12px;vertical-align:-1px;background:${nm.color}"></span> ${esc(threadName(nm.color))} · ${(nm.colCount - nm.inCol).toLocaleString()} stitches left in this colour${nm.after === 2 ? ' · <b>trim next</b>' : nm.after === 3 ? ' · <b>colour change next</b>' : nm.after === 4 ? ' · <b>last stitch</b>' : ''}<br>Needle ${(Math.abs(nm.dx) / 25.4).toFixed(2)} in ${nm.dx >= 0 ? 'right' : 'left'}, ${(Math.abs(nm.dy) / 25.4).toFixed(2)} in ${nm.dy >= 0 ? 'below' : 'above'} hoop centre · <span style="color:#2ecc71">green arrow</span> = next stitch</p>` : ''}
-      <div class="row" style="margin-top:8px"><label>Count by</label><div class="toggle" id="ndM"><button data-v="col" class="${isCol ? 'on' : ''}">Colour block (like the Topaz)</button><button data-v="all" class="${!isCol ? 'on' : ''}">Whole design</button></div></div>
+      <div style="margin:10px 0 0;padding:8px;border-radius:8px;border:1px dashed var(--line)"><div class="small" style="margin:0 0 4px"><b>Match my machine's securing stitches</b> — it adds a few tie stitches at every start and before every trim, and counts them. Type the total your screen shows in brackets for <b>colour ${col + 1}</b>:</div>
+        <div class="row" style="margin:0"><input type="number" id="ndCal" min="1" step="1" placeholder="e.g. 9429" style="width:96px;font:600 15px ui-monospace,Menlo,monospace"><button class="btn sm" id="ndCalGo" style="margin-left:6px">Match</button>${doc.tieK ? '<button class="btn sm" id="ndCalX" style="margin-left:6px">Reset</button>' : ''}</div>
+        <div class="small" style="margin:4px 0 0;opacity:.8">${doc.tieK ? `Counting <b>${doc.tieK > 0 ? '+' : ''}${doc.tieK}</b> securing stitches per tie (${MC.ties[col] || 0} ties in this colour).` : `Counting the file's stitches only (${MC.ties[col] || 0} ties in this colour).`}</div></div>
+      <div class="small" style="margin:8px 0 4px">Count by</div><div class="toggle" id="ndM"><button data-v="col" class="${isCol ? 'on' : ''}">Colour block (Topaz)</button><button data-v="all" class="${!isCol ? 'on' : ''}">Whole design</button></div>
       <p class="small" style="margin:4px 0 0;opacity:.75">Counts needle drops only, like the machine. Check the colour count (${ncol}) and stitches per colour match your screen — if they do, every number lines up.</p></div>`;
     return { html, bind: () => {
       const go = (n, keepView) => {
         needleMark = { n: Math.max(1, n), mode: needleMode.mode, col: needleMode.col };
         const pd = previewCache || (previewCache = design(solo != null)), info = needleInfo(pd, needleMark);
-        if (info) { needleMark.n = needleMark.mode === 'col' ? info.inCol : info.total; needleMode.col = info.col; progress = info.total / Math.max(1, info.count); if (!keepView) needleCenter(info); }
+        if (info) { needleMark.n = needleMark.mode === 'col' ? info.inCol : info.total; needleMode.col = info.col; progress = info.rawN / Math.max(1, pd.count); if (!keepView) needleCenter(info); }
         renderSheet(); draw(); };
       const inp = $('#ndN');
       $('#ndGo').addEventListener('click', () => { const v = +inp.value; if (v > 0) go(v); else toast('Type the stitch number from your machine'); });
@@ -3166,6 +3183,18 @@
       }));
       const stepCol = k => { needleMode.col = Math.max(0, Math.min(ncol - 1, col + k)); if (needleMark) go(1); else renderSheet(); };
       on('ndCm', () => stepCol(-1)); on('ndCp', () => stepCol(1));
+      on('ndCalGo', () => {
+        const v = +$('#ndCal').value; if (!(v > 0)) { toast('Type the number in brackets from your machine for this colour'); return; }
+        const base = machineCount(d, 0), n = base.ties[col] || 0;
+        if (!n) { toast('This colour has no ties to adjust'); return; }
+        const kk = Math.round((v - base.colTot[col]) / n);
+        if (Math.abs(kk) > 20) { toast(`That's ${v - base.colTot[col]} stitches off — check it's the same colour block and the same version of the file as on the machine`); return; }
+        doc.tieK = kk; autosave();
+        const now = machineCount(d, kk).colTot[col];
+        toast(now === v ? `Matched — ${kk} securing stitches per tie. Colour ${col + 1} now shows (${now}) like your machine` : `Closest: ${kk} per tie gives (${now}) vs your (${v}), off by ${Math.abs(now - v)}`);
+        if (needleMark) go(needleMark.n, true); else renderSheet();
+      });
+      on('ndCalX', () => { doc.tieK = 0; autosave(); if (needleMark) go(needleMark.n, true); else renderSheet(); });
       on('ndX', () => { needleMark = null; progress = 1; renderSheet(); draw(); });
       on('ndZ', () => { const info = needleInfo(previewCache || (previewCache = design(solo != null)), needleMark); if (!info) return; const r = cv.getBoundingClientRect(); view.s = Math.max(view.s, 14); view.x = r.width / 2 - info.x * view.s; view.y = r.height / 2 - info.y * view.s; drawNav && drawNav(); draw(); });
       const mb = $('#ndM'); if (mb) mb.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => {
