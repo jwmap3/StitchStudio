@@ -720,7 +720,7 @@
   // ---------------- needle finder: where does stitch #N land? (stitches = needle drops, like the machine counts;
   // jumps aren't counted). Mode 'all' = counted over the whole design, 'col' = counted within one thread colour.
   let needleMark = null;   // { n, mode: 'all'|'col', col }
-  const needleMode = { mode: 'all', col: 0 };
+  const needleMode = { mode: 'col', col: 0 };   // like the Topaz screen: colour block, then stitch # within it
   function needleInfo(d, m) {
     const st = d.stitches, colTot = [0]; let ci = 0;
     for (const s2 of st) { if (s2.c === 3) { ci++; colTot[ci] = 0; } else if (s2.c === 0) colTot[ci]++; }
@@ -761,7 +761,7 @@
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 5; ctx.stroke(); ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 2.5; ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fillStyle = '#ff3b3b'; ctx.fill();
     // label
-    const t = `#${nm.total.toLocaleString()} · colour ${nm.col + 1} stitch ${nm.inCol.toLocaleString()}`;
+    const t = `▮ ${nm.col + 1}(${nm.ncol})   ${nm.inCol} (${nm.colCount})`;
     ctx.font = '600 13px system-ui'; const tw = ctx.measureText(t).width;
     let lx = x + 16, ly = y - 44; if (lx + tw + 18 > ctx.canvas.width / (window.devicePixelRatio || 1)) lx = x - tw - 34; if (ly < 8) ly = y + 22;
     ctx.fillStyle = 'rgba(11,18,32,.92)'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(lx, ly, tw + 30, 24, 12) : ctx.rect(lx, ly, tw + 30, 24); ctx.fill();
@@ -3122,23 +3122,50 @@
   }
 
   function needleBox(d) {
-    const m = needleMark || { n: 1, mode: needleMode.mode, col: needleMode.col }, nm = needleMark && needleInfo(d, needleMark);
+    // Laid out like the Designer Topaz stitch-out screen:  colour block  4(12)   stitch 7427 (9429)
+    const nm = needleMark && needleInfo(d, needleMark);
+    const ncol = d.colors.length, col = nm ? nm.col : Math.min(needleMode.col, Math.max(0, ncol - 1));
+    const colTot = []; { let ci = 0; colTot[0] = 0; d.stitches.forEach(s2 => { if (s2.c === 3) { ci++; colTot[ci] = 0; } else if (s2.c === 0) colTot[ci]++; }); }
+    const cc = d.colors[col] ? d.colors[col].color : '#000';
+    const isCol = needleMode.mode !== 'all';
     const html = `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin:4px 0 10px"><h3 style="margin:0 0 6px">📍 Find a stitch</h3>
-      <p class="small" style="margin:0 0 8px">Type the stitch number your machine shows — the preview sews up to it and marks exactly where the needle goes.</p>
-      <div class="row"><label>Counted</label><div class="toggle" id="ndM"><button data-v="all" class="${m.mode !== 'col' ? 'on' : ''}">Whole design</button><button data-v="col" class="${m.mode === 'col' ? 'on' : ''}">Within a colour</button></div></div>
-      ${m.mode === 'col' ? `<div class="row"><label>Colour</label><div class="swatches" id="ndC">${d.colors.map((c, i) => `<button class="sw ${i === (m.col || 0) ? 'on' : ''}" data-i="${i}" title="Colour ${i + 1}" style="background:${c.color};width:30px;height:30px;font:600 11px system-ui;color:#fff;text-shadow:0 0 3px #000">${i + 1}</button>`).join('')}</div></div>` : ''}
-      <div class="row"><label>Stitch #</label><input type="number" id="ndN" min="1" step="1" value="${needleMark ? m.n : ''}" placeholder="e.g. 4512" style="width:120px"><button class="btn primary sm" id="ndGo" style="margin-left:6px">Show</button></div>
+      <p class="small" style="margin:0 0 8px">Enter what your Topaz screen shows — the colour block and the stitch number in that colour — and the preview marks exactly where the needle goes.</p>
+      ${isCol ? `<div class="row"><label>Colour block</label><button class="btn sm" id="ndCm" style="min-width:34px">−</button>
+        <span style="display:inline-flex;align-items:center;gap:6px;margin:0 8px;font:700 18px ui-monospace,Menlo,monospace"><span class="sw" style="display:inline-block;width:18px;height:18px;background:${cc}"></span>${col + 1}<span style="opacity:.6">(${ncol})</span></span>
+        <button class="btn sm" id="ndCp" style="min-width:38px">+</button></div>
+      <div class="row"><label>Stitch</label><input type="number" id="ndN" min="1" step="1" value="${nm ? nm.inCol : ''}" placeholder="e.g. 7427" style="width:96px;font:700 16px ui-monospace,Menlo,monospace"><span style="margin:0 6px;font:600 15px ui-monospace,Menlo,monospace;opacity:.75">(${colTot[col] || 0})</span></div>
+      <div class="btns" style="margin:2px 0 4px">${btn('ndGo', 'Show where the needle is', 'primary')}</div>`
+      : `<div class="row"><label>Stitch #</label><input type="number" id="ndN" min="1" step="1" value="${nm ? nm.total : ''}" placeholder="e.g. 14282" style="width:110px;font:700 16px ui-monospace,Menlo,monospace"><span style="margin:0 6px;font:600 15px ui-monospace,Menlo,monospace;opacity:.75">(${d.count})</span></div>
+      <div class="btns" style="margin:2px 0 4px">${btn('ndGo', 'Show where the needle is', 'primary')}</div>`}
       <div class="btns" style="margin:4px 0">${btn('ndM100', '−100', 'sm')}${btn('ndM10', '−10', 'sm')}${btn('ndM1', '−1', 'sm')}${btn('ndP1', '+1', 'sm')}${btn('ndP10', '+10', 'sm')}${btn('ndP100', '+100', 'sm')}${needleMark ? btn('ndZ', '🔍 Zoom to needle', 'sm') + btn('ndX', '✕ Clear', 'sm') : ''}</div>
-      ${nm ? `<p class="small" style="margin:6px 0 0;line-height:1.5"><b>Stitch ${nm.total.toLocaleString()} of ${nm.count.toLocaleString()}</b> · colour <b>${nm.col + 1}</b> of ${nm.ncol} <span class="sw" style="display:inline-block;width:12px;height:12px;vertical-align:-1px;background:${nm.color}"></span> ${esc(threadName(nm.color))} · stitch <b>${nm.inCol.toLocaleString()}</b> of ${nm.colCount.toLocaleString()} in this colour<br>Needle at ${(Math.abs(nm.dx) / 25.4).toFixed(2)} in ${nm.dx >= 0 ? 'right' : 'left'}, ${(Math.abs(nm.dy) / 25.4).toFixed(2)} in ${nm.dy >= 0 ? 'below' : 'above'} the hoop centre${nm.after === 2 ? ' · <b>trim next</b>' : nm.after === 3 ? ' · <b>colour change next</b>' : nm.after === 4 ? ' · <b>last stitch</b>' : ''}<br><span style="color:#2ecc71">green arrow</span> = where it goes next</p>` : ''}
-      <p class="small" style="margin:6px 0 0;opacity:.75">Counts only needle drops (jumps don't count), same as the machine. If your screen shows the stitch number per colour, use “Within a colour”.</p></div>`;
+      ${nm ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#e9efe6;color:#111;font:600 14px ui-monospace,Menlo,monospace;line-height:1.6">
+          <div style="display:flex;justify-content:space-between"><span>▮ ${nm.col + 1}(${nm.ncol})</span><span style="opacity:.7">---${nm.total.toLocaleString('en-US').replace(/,/g, '')}</span></div>
+          <div>${nm.inCol}<span style="opacity:.7"> (${nm.colCount})</span></div></div>
+        <p class="small" style="margin:6px 0 0;line-height:1.5"><span class="sw" style="display:inline-block;width:12px;height:12px;vertical-align:-1px;background:${nm.color}"></span> ${esc(threadName(nm.color))} · ${(nm.colCount - nm.inCol).toLocaleString()} stitches left in this colour${nm.after === 2 ? ' · <b>trim next</b>' : nm.after === 3 ? ' · <b>colour change next</b>' : nm.after === 4 ? ' · <b>last stitch</b>' : ''}<br>Needle ${(Math.abs(nm.dx) / 25.4).toFixed(2)} in ${nm.dx >= 0 ? 'right' : 'left'}, ${(Math.abs(nm.dy) / 25.4).toFixed(2)} in ${nm.dy >= 0 ? 'below' : 'above'} hoop centre · <span style="color:#2ecc71">green arrow</span> = next stitch</p>` : ''}
+      <div class="row" style="margin-top:8px"><label>Count by</label><div class="toggle" id="ndM"><button data-v="col" class="${isCol ? 'on' : ''}">Colour block (like the Topaz)</button><button data-v="all" class="${!isCol ? 'on' : ''}">Whole design</button></div></div>
+      <p class="small" style="margin:4px 0 0;opacity:.75">Counts needle drops only, like the machine. Check the colour count (${ncol}) and stitches per colour match your screen — if they do, every number lines up.</p></div>`;
     return { html, bind: () => {
-      const go = (n, keepView) => { needleMark = { n: Math.max(1, n), mode: needleMode.mode, col: needleMode.col };
-        const pd = previewCache || (previewCache = design(solo != null)), info = needleInfo(pd, needleMark); if (info) { needleMark.n = needleMark.mode === 'col' ? info.inCol : info.total; progress = info.total / Math.max(1, info.count); if (!keepView) needleCenter(info); }
+      const go = (n, keepView) => {
+        needleMark = { n: Math.max(1, n), mode: needleMode.mode, col: needleMode.col };
+        const pd = previewCache || (previewCache = design(solo != null)), info = needleInfo(pd, needleMark);
+        if (info) { needleMark.n = needleMark.mode === 'col' ? info.inCol : info.total; needleMode.col = info.col; progress = info.total / Math.max(1, info.count); if (!keepView) needleCenter(info); }
         renderSheet(); draw(); };
       const inp = $('#ndN');
       $('#ndGo').addEventListener('click', () => { const v = +inp.value; if (v > 0) go(v); else toast('Type the stitch number from your machine'); });
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ndGo').click(); } });
-      [['ndM100', -100], ['ndM10', -10], ['ndM1', -1], ['ndP1', 1], ['ndP10', 10], ['ndP100', 100]].forEach(([id, k]) => on(id, () => go((needleMark ? needleMark.n : 0) + k)));
+      [['ndM100', -100], ['ndM10', -10], ['ndM1', -1], ['ndP1', 1], ['ndP10', 10], ['ndP100', 100]].forEach(([id, k]) => on(id, () => {
+        if (!needleMark) { go(Math.max(1, k)); return; }
+        const pd = previewCache || design(solo != null), info = needleInfo(pd, needleMark); if (!info) return;
+        if (needleMode.mode === 'col') {
+          // step past the end / start of a colour into the next / previous one, like the machine does
+          let c2 = info.col, n2 = info.inCol + k;
+          while (n2 > (colTot[c2] || 0) && c2 < ncol - 1) { n2 -= colTot[c2]; c2++; }
+          while (n2 < 1 && c2 > 0) { c2--; n2 += colTot[c2]; }
+          needleMode.col = c2; go(Math.max(1, Math.min(colTot[c2] || 1, n2)));
+        } else go(info.total + k);
+      }));
+      const stepCol = k => { needleMode.col = Math.max(0, Math.min(ncol - 1, col + k)); if (needleMark) go(1); else renderSheet(); };
+      on('ndCm', () => stepCol(-1)); on('ndCp', () => stepCol(1));
       on('ndX', () => { needleMark = null; progress = 1; renderSheet(); draw(); });
       on('ndZ', () => { const info = needleInfo(previewCache || (previewCache = design(solo != null)), needleMark); if (!info) return; const r = cv.getBoundingClientRect(); view.s = Math.max(view.s, 14); view.x = r.width / 2 - info.x * view.s; view.y = r.height / 2 - info.y * view.s; drawNav && drawNav(); draw(); });
       const mb = $('#ndM'); if (mb) mb.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => {
@@ -3146,7 +3173,6 @@
         needleMode.mode = mode; if (info) { needleMode.col = info.col; needleMark = { mode, col: info.col, n: mode === 'col' ? info.inCol : info.total }; }
         renderSheet(); draw();
       }));
-      const cb = $('#ndC'); if (cb) cb.querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { needleMode.col = +b2.dataset.i; if (needleMark) go(needleMark.n); else { renderSheet(); } }));
     } };
   }
   function renderHoopSheet() {
