@@ -1033,7 +1033,10 @@
       if (!pieces.length) continue;
       const own = masks[oi], shaped = !!own;
       // a connecting line is buried if it stays inside this shape or under a shape sewn later
-      const hidden = (a, b) => samples(a, b, 0.3).every((q, i, arr) => i === 0 || i === arr.length - 1 || look(own, q, 'near') || laterHas(oi, q, 'near'));
+      // once this shape's top stitches have started, a travel thread across it would lie ON TOP of them,
+      // so only a later layer can hide it then (short hops under 2.5 mm stay, they sink into the fill)
+      let topSewn = false;
+      const hidden = (a, b) => samples(a, b, 0.3).every((q, i, arr) => i === 0 || i === arr.length - 1 || (!topSewn && look(own, q, 'near')) || laterHas(oi, q, 'near'));
       // split pieces: drop stitches a later layer completely covers; break stitches that stray outside the shape
       if (knockout || shaped) {
         const out = [];
@@ -1067,11 +1070,12 @@
           if (d > hopMax) {
             // travel with a running stitch only where it will be buried; otherwise trim so no
             // stray thread is left lying across the fabric or across other colours
-            if (d < (o.sand ? 3 : 40) && hidden(pos, first)) { const n = Math.ceil(d / (d < 12 ? 2.0 : 3.0)); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
+            if (d < (o.sand ? 3 : 40) && ((d <= 2.5 && samples(pos, first, 0.3).every(q => look(own, q, 'deep') || laterHas(oi, q, 'near'))) || hidden(pos, first))) { const n = Math.ceil(d / (d < 12 ? 2.0 : 3.0)); const a0 = pos.slice(); for (let i = 1; i < n; i++) stitchTo([a0[0] + (first[0] - a0[0]) * i / n, a0[1] + (first[1] - a0[1]) * i / n]); }
             else trim();
           }
         }
         for (const p of pc.pts) stitchTo(p);
+        if (pc.kind !== 'underlay') topSewn = true;
       }
       trim();
     }

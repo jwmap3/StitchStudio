@@ -1096,13 +1096,13 @@
     return false;
   }
   // straighten: every point between point kA and point kB (same outline) moves onto the line A→B, keeping its spacing
-  let alignA = null;   // { id, k }
+  let alignA = null, alignArm = false;   // { id, k }; alignArm: phone 'Line up' button armed, next taps pick A then B
   function alignPick(p) {
     const o = sel();
     if (!o || !['fill', 'satin', 'run'].includes(o.type)) { toast('Select a fill, satin or line first'); return false; }
     const k = hitNode(o, p);
     if (k < 0) { toast('Middle-click right on a point'); return false; }
-    if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); toast('Point A set — middle-click the second point'); return true; }
+    if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); toast(alignArm ? 'Start point set — now tap the end point' : 'Point A set — middle-click the second point'); hint(alignArm ? 'Tap the END point — everything between lines up' : ''); return true; }
     const A = nodeAt(o, alignA.k), B = nodeAt(o, k);
     if (o.type === 'satin' && o.mode === 'rails') return alignRailSide(o, A.pi, B.pi, k);
     if (A.li !== B.li) { toast('Both points must be on the same outline'); alignA = null; selNode = -1; draw(); return true; }
@@ -1124,7 +1124,7 @@
     for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(arr[chain[j]][0] - arr[chain[j - 1]][0], arr[chain[j]][1] - arr[chain[j - 1]][1]));
     const tot = cum[cum.length - 1] || 1;
     idx.forEach((i, j) => { const t = cum[j + 1] / tot; arr[i][0] = P[0] + (Q[0] - P[0]) * t; arr[i][1] = P[1] + (Q[1] - P[1]) * t; });
-    alignA = null; selNode = k; commit(); renderSheet(); draw();
+    alignA = null; alignArm = false; hint(''); selNode = k; commit(); renderSheet(); draw();
     toast(`Lined up ${idx.length} point${idx.length > 1 ? 's' : ''}`);
     return true;
   }
@@ -1146,7 +1146,7 @@
     const cum = [0]; for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(pt(chain[j])[0] - pt(chain[j - 1])[0], pt(chain[j])[1] - pt(chain[j - 1])[1]));
     const tot = cum[cum.length - 1] || 1;
     chain.slice(1, -1).forEach((j, i) => { const t = cum[i + 1] / tot, q = pt(j); q[0] = P[0] + (Q[0] - P[0]) * t; q[1] = P[1] + (Q[1] - P[1]) * t; });
-    alignA = null; selNode = 2 * chain[chain.length - 1] + side; commit(); renderSheet(); draw();
+    alignA = null; alignArm = false; hint(''); selNode = 2 * chain[chain.length - 1] + side; commit(); renderSheet(); draw();
     toast(`Lined up ${chain.length - 2} point${chain.length > 3 ? 's' : ''} on ${side ? 'side B' : 'side A'} only — the other side wasn't touched`);
     return true;
   }
@@ -1172,6 +1172,7 @@
     gesture = { type: 'tap', start: [e.offsetX, e.offsetY], p, moved: false, v: Object.assign({}, view) };
     if (orderMode && !preview) { const h = hitObject(p); gesture = null; if (h) { if (pickKind === 'iso') isoToggle(h, p); else orderToggle(h.id); } return; }
     if (secArm && !preview) { gesture = null; secTap(p); return; }
+    if (alignArm && !preview && tool === 'select') { const so = sel(); if (so && hitNode(so, p) >= 0) { gesture = null; alignPick(p); return; } }
     if (persp && !preview) { const k = persp.pts.findIndex(q => { const [x, y] = toPX(q); return Math.hypot(x - e.offsetX, y - e.offsetY) < 24; }); if (k >= 0) { gesture.type = 'perspnode'; gesture.k = k; return; } }
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
@@ -2932,7 +2933,7 @@
     if (o.type === 'text') parts.push(borderPanel(o));
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
     parts.push(transformPanel(o));
-    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${btn('pDel', 'Delete', 'danger')}</div>
+    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${['fill', 'satin', 'run'].includes(o.type) && !o.edge ? btn('pAlign', alignArm ? '✕ Cancel line-up' : '📏 Line up points') : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
     if (o.type === 'text') bindText(o);
@@ -2963,6 +2964,7 @@
     on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
     on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 3, 3); addObject(c); });
     on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
+    on('pAlign', () => { if (alignArm) { alignArm = false; alignA = null; hint(''); renderSheet(); draw(); return; } alignArm = true; alignA = null; toast(`Tap the start point, then the end point — the points between go straight${o.type === 'satin' && o.mode === 'rails' ? ' (only that side of the column)' : ''}`); renderSheet(); hint('📏 Tap the START point'); });
     on('pDelNode', () => {
       if (selNode < 0) { toast('Tap a point first'); return; }
       const n = nodeAt(o, selNode); const arr = o.type === 'fill' ? o.paths[n.li] : o.points;
@@ -3339,7 +3341,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPending: () => !!alignA, hitNode, alignPick, alignCancel() { if (alignA) { alignA = null; selNode = -1; draw(); } },
+    alignPending: () => !!alignA, hitNode, alignPick, alignCancel() { if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
