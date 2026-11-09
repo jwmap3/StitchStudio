@@ -1110,13 +1110,13 @@
     return false;
   }
   // straighten: every point between point kA and point kB (same outline) moves onto the line A→B, keeping its spacing
-  let alignA = null, alignArm = false;   // { id, k }; alignArm: phone 'Line up' button armed, next taps pick A then B
+  let alignA = null, alignArm = false, alignChain = false;   // alignChain: straighten mode, every left click lines up from the last point   // { id, k }; alignArm: phone 'Line up' button armed, next taps pick A then B
   function alignPick(p) {
     const o = sel();
     if (!o || !['fill', 'satin', 'run'].includes(o.type)) { toast('Select a fill, satin or line first'); return false; }
     const k = hitNode(o, p);
     if (k < 0) { toast('Middle-click right on a point'); return false; }
-    if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); toast(alignArm ? 'Start point set — now tap the end point' : 'Point A set — middle-click the second point'); hint(alignArm ? 'Tap the END point — everything between lines up' : ''); return true; }
+    if (!alignA || alignA.id !== o.id || alignA.k === k) { alignA = { id: o.id, k }; selNode = k; draw(); if (alignChain) { hint('📏 Straighten mode — click the next point'); } else { toast(alignArm ? 'Start point set — now tap the end point' : 'Point A set — middle-click the second point'); hint(alignArm ? 'Tap the END point — everything between lines up' : ''); } return true; }
     const A = nodeAt(o, alignA.k), B = nodeAt(o, k);
     if (o.type === 'satin' && o.mode === 'rails') return alignRailSide(o, A.pi, B.pi, k);
     if (A.li !== B.li) { toast('Both points must be on the same outline'); alignA = null; selNode = -1; draw(); return true; }
@@ -1131,19 +1131,26 @@
       if (plen(i0, i1) > plen(i1, i0)) [i0, i1] = [i1, i0];
       for (let i = (i0 + 1) % n; i !== i1; i = (i + 1) % n) idx.push(i);
     }
-    if (!idx.length) { toast('No points between those two'); alignA = null; selNode = -1; draw(); return true; }
+    if (!idx.length) { if (alignChain) { alignA = { id: o.id, k }; selNode = k; draw(); return true; } toast('No points between those two'); alignA = null; selNode = -1; draw(); return true; }
     const P = arr[i0], Q = arr[i1];
     // keep the points' relative spacing along the path
     const chain = [i0].concat(idx, [i1]); let cum = [0];
     for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(arr[chain[j]][0] - arr[chain[j - 1]][0], arr[chain[j]][1] - arr[chain[j - 1]][1]));
     const tot = cum[cum.length - 1] || 1;
     idx.forEach((i, j) => { const t = cum[j + 1] / tot; arr[i][0] = P[0] + (Q[0] - P[0]) * t; arr[i][1] = P[1] + (Q[1] - P[1]) * t; });
-    alignA = null; alignArm = false; hint(''); selNode = k; commit(); renderSheet(); draw();
+    if (alignChain) { alignA = { id: o.id, k }; selNode = k; commit(); renderSheet(); draw(); hint('📏 Straighten mode — click the next point (Esc or Q to stop)'); }
+    else { alignA = null; alignArm = false; hint(''); selNode = k; commit(); renderSheet(); draw(); }
     toast(`Lined up ${idx.length} point${idx.length > 1 ? 's' : ''}`);
     return true;
   }
   // streamline column: points alternate side A, side B (one pair per direction line).
   // Line up only the side the first point is on; the second click picks the stretch.
+  function setStraighten(on) {
+    alignChain = !!on; alignArm = alignChain; alignA = null;
+    if (alignChain) { if (tool !== 'select') setTool('select', true); hint('📏 Straighten mode — click a point to start, then keep clicking points (Esc or Q to stop)'); toast('Straighten mode on: click point after point, each stretch goes straight'); }
+    else { hint(''); selNode = -1; }
+    renderSheet(); draw();
+  }
   function alignRailSide(o, ia, ib, kSel) {
     const side = ia % 2, m = Math.floor(o.points.length / 2), closed = !!o.closed && m >= 3;
     let a = Math.floor(ia / 2), b = Math.floor(ib / 2);
@@ -1155,12 +1162,14 @@
       const len = c => c.reduce((t, j, i) => i ? t + Math.hypot(pt(j)[0] - pt(c[i - 1])[0], pt(j)[1] - pt(c[i - 1])[1]) : 0, 0);
       const c1 = walk(a, b), c2 = walk(b, a); chain = len(c1) <= len(c2) ? c1 : c2;
     }
-    if (chain.length < 3) { toast('No points between those two on this side'); alignA = null; selNode = -1; draw(); return true; }
+    if (chain.length < 3) { if (alignChain) { alignA = { id: o.id, k: 2 * chain[chain.length - 1] + side }; selNode = alignA.k; draw(); return true; } toast('No points between those two on this side'); alignA = null; selNode = -1; draw(); return true; }
     const P = pt(chain[0]), Q = pt(chain[chain.length - 1]);
     const cum = [0]; for (let j = 1; j < chain.length; j++) cum.push(cum[j - 1] + Math.hypot(pt(chain[j])[0] - pt(chain[j - 1])[0], pt(chain[j])[1] - pt(chain[j - 1])[1]));
     const tot = cum[cum.length - 1] || 1;
     chain.slice(1, -1).forEach((j, i) => { const t = cum[i + 1] / tot, q = pt(j); q[0] = P[0] + (Q[0] - P[0]) * t; q[1] = P[1] + (Q[1] - P[1]) * t; });
-    alignA = null; alignArm = false; hint(''); selNode = 2 * chain[chain.length - 1] + side; commit(); renderSheet(); draw();
+    const kk2 = 2 * chain[chain.length - 1] + side;
+    if (alignChain) { alignA = { id: o.id, k: kk2 }; selNode = kk2; commit(); renderSheet(); draw(); hint('📏 Straighten mode — click the next point on this side (Esc or Q to stop)'); }
+    else { alignA = null; alignArm = false; hint(''); selNode = kk2; commit(); renderSheet(); draw(); }
     toast(`Lined up ${chain.length - 2} point${chain.length > 3 ? 's' : ''} on ${side ? 'side B' : 'side A'} only — the other side wasn't touched`);
     return true;
   }
@@ -2947,7 +2956,7 @@
     if (o.type === 'text') parts.push(borderPanel(o));
     if (o.type !== 'run' && o.type !== 'stitches') parts.push(`<div class="row"><label>Underlay</label><div class="toggle" id="tUnder"><button data-v="1" class="${o.underlay !== false ? 'on' : ''}">On</button><button data-v="0" class="${o.underlay === false ? 'on' : ''}">Off</button></div></div>`);
     parts.push(transformPanel(o));
-    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${['fill', 'satin', 'run'].includes(o.type) && !o.edge ? btn('pAlign', alignArm ? '✕ Cancel line-up' : '📏 Line up points') : ''}${btn('pDel', 'Delete', 'danger')}</div>
+    parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${['fill', 'satin', 'run'].includes(o.type) && !o.edge ? (alignChain ? btn('pStr', '✓ Done straightening', 'primary') : btn('pAlign', alignArm ? '✕ Cancel line-up' : '📏 Line up points') + btn('pStr', '📏 Straighten mode')) : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
     if (o.type === 'text') bindText(o);
@@ -2978,6 +2987,7 @@
     on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
     on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 3, 3); addObject(c); });
     on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
+    on('pStr', () => setStraighten(!alignChain));
     on('pAlign', () => { if (alignArm) { alignArm = false; alignA = null; hint(''); renderSheet(); draw(); return; } alignArm = true; alignA = null; toast(`Tap the start point, then the end point — the points between go straight${o.type === 'satin' && o.mode === 'rails' ? ' (only that side of the column)' : ''}`); renderSheet(); hint('📏 Tap the START point'); });
     on('pDelNode', () => {
       if (selNode < 0) { toast('Tap a point first'); return; }
@@ -3380,6 +3390,7 @@
     flipPic(axis) { if (!doc.bg || !bgImg) { toast('No picture to flip'); return; } bakeBg(t => { if (axis === 'v') t.fv = !t.fv; else t.fh = !t.fh; }); toast(axis === 'v' ? 'Picture flipped top-to-bottom' : 'Picture flipped left-to-right'); },
     rotatePic(deg) { if (!doc.bg || !bgImg) return; bakeBg(t => { t.rot += deg; }); },
     relayoutText() { doc.objects.filter(x => x.type === 'text').forEach(layoutText); cache.clear(); draw(); },
+    machineExport(kind) { const d = design(); const { out, turned } = machineOut(d, d.bounds); return { bytes: Array.from(kind === 'dst' ? S.writeDST(out, doc.name) : S.writeVP3(out)), turned, count: d.count, colors: d.colors.length, trims: d.trims, bounds: d.bounds }; },
     edgeBorderObj(loop, shape, cfg, color, name) { const e = Object.assign({ src: loop.map(q => [q[0], q[1]]), side: S.edgeSide(loop, shape), gap: 0, corners: 'round', place: 'out', shift: 0 }, cfg); const m = { type: 'satin', mode: 'rails', closed: true, curve: false, name, spacing: 0.36, underlay: true, pullComp: 0.12, color, edge: e }; m.points = edgeSatinPoints(e); return m; }, threadName,
     layerToBorder, detachTextBorder, secStart(id) { secArm = { id }; hint('Click on the outline where the border should START (Esc to cancel)'); }, secCancel() { if (secArm) { secArm = null; hint(''); draw(); } },
     setIsoMode, setSoloMany, inView, pickKind: () => pickKind, setOrderMode, orderToggle, orderMode: () => orderMode, orderList: () => orderList.slice(), renderSplitSheet, renderMultiHoopSheet, selectAll, scaleGroup, setSolo, solo: () => solo, setTool, renderSheet, draw, drawNow, restitch, isolateAt, addSatinBorder, addBorderAround, finishDraft, hasDraft: () => !!draft, fit, undo, redo, commit, move, translate, xform, bbox, expand, pieces, design,
@@ -3396,7 +3407,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPending: () => !!alignA, hitNode, alignPick, alignCancel() { if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
+    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };

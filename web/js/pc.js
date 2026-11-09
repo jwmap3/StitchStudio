@@ -87,6 +87,7 @@
       case 'isolate': { const o2 = SS.sel(); if (o2 && ctxPt) SS.isolateAt(o2, ctxPt); break; }
       case 'wrap': { const o2 = SS.sel(); if (o2 && o2.type === 'fill') { o2.wrap = !o2.wrap; if (o2.wrap) { delete o2.flow; if (!o2.satinLook) { o2.satinLook = true; o2.stitchLen = 12; o2.pullComp = 0.15; } } SS.commit(); SS.renderSheet(); SS.draw(); SS.toast(o2.wrap ? 'Thread now wraps around the shape' : 'Thread back to one straight angle'); } break; }
       case 'borderSel': { const ids = SS.multiIds(), objs = SS.doc().objects.filter(x => ids.includes(x.id)); SS.busy(true); setTimeout(() => { try { SS.addBorderAround(objs, 2.5, objs[0] ? objs[0].color : '#000000'); } finally { SS.busy(false); } }, 30); break; }
+      case 'straighten': { SS.setStraighten(true); if (ctxPt) SS.alignPick(ctxPt); break; }
       case 'alignStart': { if (ctxPt) { SS.alignPick(ctxPt); SS.toast('Now right-click (or middle-click) the end point — everything between lines up'); } break; }
       case 'soloSel': { SS.setSoloMany(SS.multiIds()); layerSig = ''; renderLayers(); break; }
       case 'useBorder': { const o2 = SS.sel(); if (o2) SS.layerToBorder(o2); break; }
@@ -152,6 +153,7 @@
     if (k.toLowerCase() === 'h') run('pic');
     if (k.toLowerCase() === 'm') run('patch');
     if (k.toLowerCase() === 'o') run('outline');
+    if (k.toLowerCase() === 'q') { SS.setStraighten(!SS.straightenMode()); return; }
   });
   let nudgeT = 0;
   let pDown = false;
@@ -204,7 +206,7 @@
       ctx.querySelectorAll('[data-c]').forEach(b => b.addEventListener('click', () => { ctx.classList.remove('open'); run(b.dataset.c); }));
       return;
     }
-    const lineUp = onPt ? `<button class="it" data-c="alignStart"><b>📏 Line up from this point…</b><span class="k">${so0.type === 'satin' && so0.mode === 'rails' ? 'this side only' : ''}</span></button><hr>` : '';
+    const lineUp = onPt ? `<button class="it" data-c="straighten"><b>📏 Straighten mode (keep clicking)</b><span class="k">Q</span></button><button class="it" data-c="alignStart"><b>📏 Line up from this point…</b><span class="k">${so0.type === 'satin' && so0.mode === 'rails' ? 'this side only' : ''}</span></button><hr>` : '';
     if (o && !onPt) SS.select(o.id);
     ctx.innerHTML = onPt && (!o || o.id !== so0.id) ? `<div class="small" style="padding:4px 10px">${esc(so0.name || TYPE[so0.type])}</div>${lineUp}` : o ? `<div class="small" style="padding:4px 10px">${esc(o.name || TYPE[o.type])}</div>${lineUp}
       <button class="it" data-c="last"><b>Bring to top</b><span class="k">Shift+]</span></button><button class="it" data-c="first">Send to bottom<span class="k">Shift+[</span></button><hr>
@@ -439,7 +441,7 @@
   function modal(html) { $('#modalBox').innerHTML = html + '<div class="btns" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="mClose">Close</button></div>'; $('#modal').classList.add('open'); $('#mClose').onclick = () => $('#modal').classList.remove('open'); }
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') $('#modal').classList.remove('open'); });
   function keysModal() {
-    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Hold V + click layers', 'Set sew order: first click sews first (release V to apply)'], ['Hold I + click layers', 'Solo: show only the layers you clicked (release I)'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
+    const K = [['V / I / B / D / T / A / L', 'Select, Pick, Brush, Draw, Text, Auto, Order'], ['Q', 'Straighten mode on/off: click point after point, each stretch goes straight'], ['Hold V + click layers', 'Set sew order: first click sews first (release V to apply)'], ['Hold I + click layers', 'Solo: show only the layers you clicked (release I)'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as (choose a folder)'], ['Ctrl+O', 'Open project'], ['Ctrl+E', 'Export VP3'], ['Ctrl+C / Ctrl+V', 'Copy / paste layer · Ctrl+V also pastes a screenshot as the picture'], ['Ctrl+D', 'Duplicate layer'], ['Del', 'Delete layer'], ['Arrows / Shift+Arrows', 'Nudge 0.1 mm / 1 mm'], ['[  ]  /  Shift+[  ]', 'Sew earlier / later / first / last'], ['Ctrl+Shift+C', 'Center layer in hoop'], ['Ctrl+0 / Ctrl+1', 'Fit hoop / actual size'], ['Ctrl+ + / Ctrl+ −, mouse wheel', 'Zoom'], ['Space+drag or middle-drag', 'Pan'], ['Middle-click point A, then point B', 'Line up every point between them (Select tool)'], ['R / P / G / H', 'Realistic view / Preview / Play simulation / Hide picture'], ['M / O', 'Patch maker / Outline'], ['Right-click', 'Layer menu'], ['Double-click a layer', 'Rename it'], ['Esc', 'Deselect / cancel']];
     modal('<h2>Keyboard shortcuts</h2><table>' + K.map(([k, v]) => `<tr><td style="white-space:nowrap"><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>');
   }
   function threadModal() {
