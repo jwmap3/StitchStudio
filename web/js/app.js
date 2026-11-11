@@ -37,7 +37,7 @@
   let doc = newDoc();
   let tool = 'select', selId = null, selNode = -1, preview = false, progress = 1;
   let draft = null;              // shape being drawn {type, loops|points}
-  const brush = { mode: 'satin', size: 3, passes: 1 };   // stitch brushes
+  const brush = { mode: 'satin', size: 3, passes: 1, keep: false, only: null, onlyFor: null };   // stitch brushes
   let streamMode = 'column';     // Streamline: 'column' (point pairs) | 'shape' (convert a fill) | 'wrap'
   let streamIns = false;         // next tap adds a direction line to the selected column
   let satinMode = 'center';      // 'center' | 'rails' (point–counterpoint)
@@ -383,8 +383,23 @@
   const still = { c: document.createElement('canvas'), key: null };
   let dragId = null, dragMode = null;
   const sprite = { c: document.createElement('canvas'), key: null, ref: null };
+  // while a brush stroke is being drawn: freeze the scene once, then only redraw the stroke
+  const strokeStill = { c: document.createElement('canvas'), key: null };
+  function drawStroking() {
+    const r = cv.getBoundingClientRect(), key = view.s + '|' + view.x + '|' + view.y + '|' + cv.width + 'x' + cv.height;
+    if (strokeStill.key !== key) {
+      const st = stroke; stroke = null; try { drawScene(null); } finally { stroke = st; }
+      if (strokeStill.c.width !== cv.width || strokeStill.c.height !== cv.height) { strokeStill.c.width = cv.width; strokeStill.c.height = cv.height; }
+      const g = strokeStill.c.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(cv, 0, 0);
+      strokeStill.key = key;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(strokeStill.c, 0, 0); ctx.setTransform(cv.width / r.width, 0, 0, cv.width / r.width, 0, 0);
+    drawDraft();
+  }
   function drawNow() {
     if (dragId != null && !preview) { drawDragging(); return; }
+    if (stroke && stroke.length > 1 && !preview && strokeStill.key) { drawStroking(); return; }
+    if (stroke && stroke.length === 1) { strokeStill.key = null; drawStroking(); return; }
     drawScene(null);
     lastView = Object.assign({}, view);
     if (window.onSSDraw) try { window.onSSDraw(); } catch (e) { console.error(e); }
@@ -663,10 +678,11 @@
     ctx.restore();
   }
   function drawDraft() {
-    if (stroke && stroke.length && tool === 'fill') {
+    if (stroke && stroke.length && (tool === 'fill' || (tool === 'brush' && brush.mode === 'cut'))) {
+      const cutting = tool === 'brush';
       ctx.save(); ctx.lineJoin = 'round'; ctx.beginPath();
       stroke.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
-      ctx.fillStyle = hexA(currentColor, 0.35); ctx.fill(); ctx.strokeStyle = '#f2b134'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+      ctx.fillStyle = cutting ? (brush.keep ? 'rgba(76,194,255,.18)' : 'rgba(255,80,80,.25)') : hexA(currentColor, 0.35); ctx.fill(); if (cutting) ctx.setLineDash([6, 4]); ctx.strokeStyle = cutting ? (brush.keep ? '#4cc2ff' : '#ff5050') : '#f2b134'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
     } else if (stroke && stroke.length) {
       ctx.save(); ctx.lineCap = ctx.lineJoin = 'round';
       const isPick = tool === 'pick';
@@ -1633,12 +1649,125 @@
     if (o) { g.fillStyle = '#000'; g.beginPath(); o.paths.forEach(l => l.forEach((q, i) => { const [x, y] = P(q); i ? g.lineTo(x, y) : g.moveTo(x, y); })); g.fill('evenodd'); }
     g.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
     g.strokeStyle = '#000'; g.fillStyle = '#000'; g.lineCap = g.lineJoin = 'round'; g.lineWidth = brush.size * k;
-    if (st.length === 1) { const [x, y] = P(st[0]); g.beginPath(); g.arc(x, y, brush.size * k / 2, 0, 7); g.fill(); }
+    if (brush.mode === 'cut') { g.globalCompositeOperation = brush.keep ? 'destination-in' : 'destination-out'; g.beginPath(); st.forEach((q, i) => { const [x, y] = P(q); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); g.fill(); }
+    else if (st.length === 1) { const [x, y] = P(st[0]); g.beginPath(); g.arc(x, y, brush.size * k / 2, 0, 7); g.fill(); }
     else { g.beginPath(); st.forEach((q, i) => { const [x, y] = P(q); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
     const data = g.getImageData(0, 0, w, h).data, M = new Uint8Array(w * h);
     for (let i = 0; i < w * h; i++) M[i] = data[i * 4 + 3] > 127 ? 1 : 0;
     return T.contours(M, w, h).map(l => T.simplify(l, 0.5)).filter(l => Math.abs(T.area(l)) > 3).map(l => l.map(q => [a + q[0] / k, b + q[1] / k]));
   }
+  // ---------------- stitch eraser for imported designs
+  // Every stitch is clipped against the brush stroke (or a lasso loop): the part outside is
+  // kept, with a fresh needle point right on the eraser's edge, so a satin column or a fill
+  // is cut cleanly instead of losing whole stitches. Tiny gaps where a zig-zag only grazed
+  // the eraser are bridged; leftover crumbs too small to sew are dropped.
+  function stitchCutter(st, mode, keepInside) {
+    const xs = st.map(p => p[0]), ys = st.map(p => p[1]);
+    if (mode === 'cut') {
+      const poly = st, n = poly.length;
+      const inPoly = p => { let c = false; for (let i = 0, j = n - 1; i < n; j = i++) { const a = poly[i], b = poly[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
+      const ts = (a, b) => {
+        const out = [], dx = b[0] - a[0], dy = b[1] - a[1];
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+          const p = poly[j], q = poly[i], ex = q[0] - p[0], ey = q[1] - p[1], den = dx * ey - dy * ex;
+          if (Math.abs(den) < 1e-12) continue;
+          const t = ((p[0] - a[0]) * ey - (p[1] - a[1]) * ex) / den, u = ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / den;
+          if (t > 0 && t < 1 && u >= 0 && u <= 1) out.push(t);
+        }
+        return out;
+      };
+      return { bb: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], ts, gone: keepInside ? p => !inPoly(p) : inPoly, outside: !!keepInside, bridge: 0.8 };
+    }
+    // brush: overlapping circles along the stroke, bucketed in a grid for speed
+    const r = brush.size / 2, r2 = r * r, cs = [], step = Math.max(0.05, r / 3);
+    st.forEach((p, i) => {
+      if (!i) { cs.push(p); return; }
+      const a = st[i - 1], d = Math.hypot(p[0] - a[0], p[1] - a[1]), k = Math.ceil(d / step);
+      for (let j = 1; j <= k; j++) cs.push([a[0] + (p[0] - a[0]) * j / k, a[1] + (p[1] - a[1]) * j / k]);
+    });
+    const cell = Math.max(0.5, r * 2), grid = new Map(), key = (i, j) => i * 100003 + j;
+    cs.forEach(c => { const k = key(Math.floor(c[0] / cell), Math.floor(c[1] / cell)); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(c); });
+    const near = (a, b) => {
+      const out = [], i0 = Math.floor((Math.min(a[0], b[0]) - r) / cell), i1 = Math.floor((Math.max(a[0], b[0]) + r) / cell);
+      const j0 = Math.floor((Math.min(a[1], b[1]) - r) / cell), j1 = Math.floor((Math.max(a[1], b[1]) + r) / cell);
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 4000) return cs;
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) { const g = grid.get(key(i, j)); if (g) out.push(...g); }
+      return out;
+    };
+    const ts = (a, b) => {
+      const out = [], dx = b[0] - a[0], dy = b[1] - a[1], A = dx * dx + dy * dy; if (A < 1e-12) return out;
+      near(a, b).forEach(c => {
+        const fx = a[0] - c[0], fy = a[1] - c[1], B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - r2, D = B * B - 4 * A * C;
+        if (D <= 0) return; const sq = Math.sqrt(D);
+        const t1 = (-B - sq) / (2 * A), t2 = (-B + sq) / (2 * A);
+        if (t1 > 0 && t1 < 1) out.push(t1); if (t2 > 0 && t2 < 1) out.push(t2);
+      });
+      return out;
+    };
+    const gone = p => near(p, p).some(c => (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 < r2);
+    return { bb: [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r], ts, gone, outside: false, bridge: Math.min(0.8, r * 0.9) };
+  }
+  function clipStitchLines(lines, C) {
+    const out = [], MIN = 0.25, hyp2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const [bx0, by0, bx1, by1] = C.bb;
+    let cur = null, clipPts = new Set();
+    const flush = () => { if (cur && cur.length > 1) out.push(cur); cur = null; };
+    for (const l of lines) {
+      flush();
+      let last = null, lastSeg = -2;
+      for (let i = 0; i + 1 < l.length; i++) {
+        const a = l[i], b = l[i + 1];
+        let parts;
+        if (Math.max(a[0], b[0]) < bx0 || Math.min(a[0], b[0]) > bx1 || Math.max(a[1], b[1]) < by0 || Math.min(a[1], b[1]) > by1) parts = C.outside ? [] : [[0, 1]];
+        else {
+          const t = [0].concat(C.ts(a, b).sort((x, y) => x - y), [1]); parts = [];
+          for (let k = 0; k + 1 < t.length; k++) {
+            if (t[k + 1] - t[k] < 1e-9) continue;
+            const m = (t[k] + t[k + 1]) / 2;
+            if (C.gone([a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m])) continue;
+            if (parts.length && Math.abs(parts[parts.length - 1][1] - t[k]) < 1e-9) parts[parts.length - 1][1] = t[k + 1]; else parts.push([t[k], t[k + 1]]);
+          }
+        }
+        for (const [t0, t1] of parts) {
+          const p0 = t0 === 0 ? a : [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0];
+          const p1 = t1 === 1 ? b : [a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
+          if (t0 > 0) clipPts.add(p0); if (t1 < 1) clipPts.add(p1);
+          if (cur && last && (last === p0 || hyp2(last, p0) < 1e-6)) cur.push(p1);
+          else if (cur && last && lastSeg >= i - 1 && hyp2(last, p0) <= C.bridge) cur.push(p0, p1);   // only grazed: bridge it
+          else { flush(); cur = [p0, p1]; }
+          last = p1; lastSeg = i;
+        }
+      }
+    }
+    flush();
+    // drop needle points the cut left too close together, then crumbs too small to sew
+    return out.map(l => {
+      const q = [l[0]];
+      for (let i = 1; i < l.length; i++) {
+        const p = l[i], prev = q[q.length - 1];
+        if (hyp2(p, prev) >= MIN || !(clipPts.has(p) || clipPts.has(prev))) q.push(p);
+        else if (i === l.length - 1 && q.length > 1) q[q.length - 1] = p;
+      }
+      return q;
+    }).filter(l => { if (l.length < 2) return false; let s = 0; for (let i = 1; i < l.length; i++) s += hyp2(l[i], l[i - 1]); return s >= 1; });
+  }
+  // erase (or cut out / keep) part of an imported design; only = one thread block or null for all
+  function eraseStitches(o, st, mode, keepInside, only) {
+    const C = stitchCutter(st, mode, keepInside);
+    let before = 0, after = 0;
+    const count = ls => ls.reduce((s, l) => s + l.length - 1, 0);
+    if (o.type === 'import') {
+      o.blocks.forEach((bl, i) => { if (only != null && i !== only) return; before += count(bl.lines); bl.lines = clipStitchLines(bl.lines, C); after += count(bl.lines); });
+      const keep = o.blocks.filter(bl => bl.lines.length);
+      if (keep.length !== o.blocks.length) { o.blocks = keep; renderProps.blk = 0; if (brush.onlyFor === o.id) brush.only = null; }
+      if (keep.length) o.color = keep[0].color;
+    } else { before = count(o.lines); o.lines = clipStitchLines(o.lines, C); after = count(o.lines); }
+    const empty = o.type === 'import' ? !o.blocks.length : !o.lines.length;
+    if (empty) { doc.objects = doc.objects.filter(x => x !== o); selId = null; }
+    commit(); renderSheet(); draw();
+    toast(empty ? 'Erased the whole layer' : before === after ? 'Nothing under the eraser — pick the right thread, or brush over the stitches' : `Erased ${(before - after).toLocaleString()} stitches`);
+  }
+
   function finishBrush(st) {
     const o = sel();
     if (brush.mode === 'satin' || brush.mode === 'line') {
@@ -1654,10 +1783,18 @@
       o.flow = (o.flow || []).concat([simplifyOpen(st, 0.3).map(p => [p[0], p[1]])]);
       commit(); renderSheet(); draw(); toast('Stitches now follow your flow lines'); return;
     }
-    // fill paint / erase
+    // imported stitches: rub out or cut out real stitches
+    if ((brush.mode === 'erase' || brush.mode === 'cut') && o && (o.type === 'import' || o.type === 'stitches')) {
+      if (brush.mode === 'cut' && st.length < 3) { draw(); return; }
+      const only = o.type === 'import' && brush.onlyFor === o.id && brush.only != null && brush.only < o.blocks.length ? brush.only : null;
+      eraseStitches(o, brush.mode === 'cut' ? simplifyOpen(st, 0.1) : st, brush.mode, brush.mode === 'cut' && brush.keep, only);
+      return;
+    }
+    // fill paint / erase / cut out
     const target = o && o.type === 'fill' ? o : null;
-    if (brush.mode === 'erase' && !target) { toast('Select a fill to erase from'); draw(); return; }
-    const loops = paintFill(target, st, brush.mode === 'erase');
+    if ((brush.mode === 'erase' || brush.mode === 'cut') && !target) { toast('Select a fill or an imported design to erase from'); draw(); return; }
+    if (brush.mode === 'cut' && st.length < 3) { draw(); return; }
+    const loops = paintFill(target, st, brush.mode === 'erase' || brush.mode === 'cut');
     if (target) {
       if (!loops.length) { doc.objects = doc.objects.filter(x => x !== target); selId = null; commit(); renderSheet(); draw(); return; }
       target.paths = loops; commit(); draw();
@@ -2684,19 +2821,28 @@
   }
 
   function renderBrushSheet() {
-    const tips = { satin: 'Paint a satin column with your finger', line: 'Paint a running-stitch line', fill: 'Paint an area. With a fill selected, you add to it', erase: 'Select a fill, then rub out parts of it', flow: 'Select a fill, then draw the direction the thread should flow' };
+    const o0 = sel(), isImp = o0 && (o0.type === 'import' || o0.type === 'stitches');
+    const tips = { satin: 'Paint a satin column with your finger', line: 'Paint a running-stitch line', fill: 'Paint an area. With a fill selected, you add to it', erase: isImp ? 'Rub over the stitches you want gone' : 'Select a fill or an imported design, then rub out parts of it', cut: brush.keep ? 'Draw a loop around the part to KEEP — everything outside goes' : 'Draw a loop around the stitches to remove', flow: 'Select a fill, then draw the direction the thread should flow' };
     hint(tips[brush.mode]);
-    const modes = [['satin', 'Satin'], ['line', 'Line'], ['fill', 'Fill'], ['erase', 'Erase'], ['flow', 'Flow']];
+    const modes = [['satin', 'Satin'], ['line', 'Line'], ['fill', 'Fill'], ['erase', 'Erase'], ['cut', 'Cut'], ['flow', 'Flow']];
     const parts = ['<div class="sec"><h3>Stitch brush</h3>',
       `<div class="toggle" id="bMode" style="display:flex">${modes.map(([k, l]) => `<button data-v="${k}" class="${brush.mode === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div>`];
     if (brush.mode === 'satin' || brush.mode === 'fill' || brush.mode === 'erase') parts.push(slider('Brush size', 'bs', 0.8, brush.mode === 'satin' ? 8 : 20, 0.1, brush.size, ' mm', v => brush.size = v));
     if (brush.mode === 'line') parts.push(`<div class="row"><label>Thickness</label><div class="toggle" id="bPass"><button data-v="1" class="${brush.passes === 1 ? 'on' : ''}">Single</button><button data-v="3" class="${brush.passes === 3 ? 'on' : ''}">Triple (bean)</button></div></div>`);
-    if (brush.mode !== 'erase' && brush.mode !== 'flow') parts.push(colorPicker(currentColor, c => { currentColor = c; renderSheet(); }));
+    if (brush.mode === 'cut') parts.push(`<div class="row"><label>Loop</label><div class="toggle" id="bKeep"><button data-v="0" class="${!brush.keep ? 'on' : ''}">Remove inside</button><button data-v="1" class="${brush.keep ? 'on' : ''}">Keep inside</button></div></div>`);
+    if ((brush.mode === 'erase' || brush.mode === 'cut') && o0 && o0.type === 'import' && o0.blocks.length > 1) {
+      const only = brush.onlyFor === o0.id ? brush.only : null;
+      parts.push(`<div class="row"><label>Threads</label><div class="swatches" id="bOnly"><button class="sw ${only == null ? 'on' : ''}" data-i="-1" style="background:conic-gradient(${o0.blocks.map((bl, k) => `${bl.color} ${k / o0.blocks.length * 100}% ${(k + 1) / o0.blocks.length * 100}%`).join(',')})" title="All threads"></button>${o0.blocks.map((bl, i) => `<button class="sw ${only === i ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name || '')}"></button>`).join('')}</div></div><p class="small" style="margin:0 0 6px">${only == null ? 'Erasing every thread under the eraser.' : 'Only erasing thread ' + (only + 1) + ' (' + esc(o0.blocks[only].name || '') + ') — the others stay.'}</p>`);
+    }
+    if ((brush.mode === 'erase' || brush.mode === 'cut') && isImp) parts.push('<p class="small" style="margin:0 0 6px">Stitches are cut right at the eraser edge, so satin and fills end cleanly. Undo (Ctrl+Z) if you take too much.</p>');
+    if (brush.mode !== 'erase' && brush.mode !== 'flow' && brush.mode !== 'cut') parts.push(colorPicker(currentColor, c => { currentColor = c; renderSheet(); }));
     const o = sel();
     if (brush.mode === 'flow' && o && o.type === 'fill') parts.push(`<div class="btns" style="margin-top:10px">${btn('bClearFlow', 'Clear flow lines')}</div>`);
     parts.push(`<p class="small" style="margin:8px 0 0">${o ? 'Editing: ' + esc(o.name || o.type) + ' — ' : ''}one finger paints, two fingers move the view.</p></div>`);
     mount(parts);
     $('#bMode').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { brush.mode = b2.dataset.v; if (brush.mode === 'satin' && brush.size > 8) brush.size = 3; renderSheet(); }));
+    const bk = $('#bKeep'); if (bk) bk.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { brush.keep = b2.dataset.v === '1'; renderSheet(); }));
+    const bo = $('#bOnly'); if (bo) bo.querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { const i = +b2.dataset.i; brush.onlyFor = o0.id; brush.only = i < 0 ? null : i; renderSheet(); }));
     const bp = $('#bPass'); if (bp) bp.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { brush.passes = +b2.dataset.v; renderSheet(); }));
     on('bClearFlow', () => { delete o.flow; commit(); renderSheet(); draw(); });
   }
@@ -2860,6 +3006,15 @@
       });
     } };
   }
+  // open the stitch brush on an imported layer, in erase or cut-out mode
+  function startEraser(o, mode, blk) {
+    if (!o) return;
+    selId = o.id; brush.mode = mode;
+    if (o.type === 'import' && o.blocks.length > 1 && blk != null && brush.onlyFor !== o.id) { brush.onlyFor = o.id; brush.only = null; }
+    if (mode === 'erase' && brush.size > 8) brush.size = 3;
+    setTool('brush', true);
+    toast(mode === 'erase' ? 'Rub over the stitches to erase them' : brush.keep ? 'Draw a loop around what to keep' : 'Draw a loop around the stitches to remove');
+  }
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
     const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]}</h3>`];
@@ -2871,7 +3026,7 @@
       parts.push(`<div class="swatches" id="impBlk">${o.blocks.map((bl, i) => `<button class="sw ${i === k ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name)}"></button>`).join('')}</div><p class="small" style="margin:6px 0">Thread ${k + 1}: ${esc(o.blocks[k].name)} — pick a new colour:</p>`);
       parts.push(colorPicker(o.blocks[k].color, c => { o.blocks[k].color = c; if (k === 0) o.color = c; commit(); renderSheet(); draw(); }));
       parts.push(transformPanel(o));
-      parts.push(`</div><div class="sec"><div class="btns">${o.blocks.length > 1 ? btn('pIso', '✂ Isolate colour') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
+      parts.push(`</div><div class="sec"><h3>Edit the stitches</h3><div class="btns">${btn('pErase', '🧽 Erase stitches')}${btn('pCut', '✂ Cut out area')}${o.blocks.length > 1 ? btn('pDelThr', '🗑 Delete thread ' + (k + 1)) : ''}${btn('pRestitch', '✨ Make editable shapes')}</div><p class="small" style="margin:6px 0 0">Erase rubs out stitches under the brush (all threads, or just one). Cut out removes — or keeps — everything inside a loop you draw. Make editable shapes turns each thread into normal fill layers you can reshape point by point.</p></div><div class="sec"><div class="btns">${o.blocks.length > 1 ? btn('pIso', '✂ Isolate colour') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
       mount(parts); bindTransform(o);
       on('pSolo', () => setSolo(o.id));
     on('pIso', () => { isoArm = true; hint('Tap the stitches of the colour to split off'); toast('Now tap the colour you want as its own layer'); });
@@ -2879,9 +3034,13 @@
       on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
       on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
       on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
+      on('pErase', () => startEraser(o, 'erase', k));
+      on('pCut', () => startEraser(o, 'cut', k));
+      on('pRestitch', () => restitch(o));
+      on('pDelThr', () => { o.blocks.splice(k, 1); o.color = o.blocks[0].color; renderProps.blk = 0; commit(); renderSheet(); draw(); toast('Thread ' + (k + 1) + ' removed'); });
       return;
     }
-    if (o.type === 'stitches') parts.push('<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p>');
+    if (o.type === 'stitches') parts.push(`<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p><div class="btns" style="margin-top:8px">${btn('pErase', '🧽 Erase stitches')}${btn('pCut', '✂ Cut out area')}</div>`);
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
     if (o.type === 'fill') {
       if (!o.sand) parts.push(`<div class="row"><label>Direction</label><div class="toggle" id="tWrap"><button data-v="0" class="${!o.wrap ? 'on' : ''}">Straight angle</button><button data-v="1" class="${o.wrap ? 'on' : ''}">↻ Wrap around</button></div></div>`);
@@ -2959,6 +3118,7 @@
     parts.push(`</div><div class="sec"><div class="btns">${o.type === 'fill' && o.paths.length > 1 ? btn('pIso', '✂ Isolate part') : ''}${btn('pSolo', solo === o.id ? '👁 Show all' : '◎ Solo')}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${o.type !== 'text' && o.type !== 'stitches' ? btn('pDelNode', 'Delete point') : ''}${['fill', 'satin', 'run'].includes(o.type) && !o.edge ? (alignChain ? btn('pStr', '✓ Done straightening', 'primary') : btn('pAlign', alignArm ? '✕ Cancel line-up' : '📏 Line up points') + btn('pStr', '📏 Straighten mode')) : ''}${btn('pDel', 'Delete', 'danger')}</div>
       <p class="small" style="margin:10px 0 0">${o.type === 'stitches' ? 'Drag inside the box to move.' : 'Drag white dots to reshape.'} Drag inside the shape to move it. Two fingers to zoom.</p></div>`);
     mount(parts); bindTransform(o);
+    if (o.type === 'stitches') { on('pErase', () => startEraser(o, 'erase', null)); on('pCut', () => startEraser(o, 'cut', null)); }
     if (o.type === 'text') bindText(o);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
@@ -3407,7 +3567,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
+    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, startEraser, eraseStitches, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
