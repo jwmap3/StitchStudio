@@ -965,8 +965,42 @@
     // (2) drop stitching that a later layer completely covers ("remove hidden stitches"),
     // (3) break any stitch of a fill that strays outside its own shape.
     const CELL = 0.2, EDGE = 0.4, UNDERLAP = opt.underlap == null ? 0.5 : opt.underlap;
+    // coverage from real stitches (imported designs, satins): mark every stitch, close the
+    // gaps between rows so dense areas read as solid, thin runs and travel lines erode away
+    const stitchMaskOf = o => {
+      let lines = null, keyObj = null;
+      if (o.type === 'stitches' && o.lines) { lines = o.lines; keyObj = o.lines; }
+      else if (o.type === 'satin' && Array.isArray(o.points)) { keyObj = o.points; }
+      else return null;
+      let fp = 0, np = 0;
+      const src = lines || o.points;
+      src.forEach(l => { const L = Array.isArray(l[0]) ? l : [l]; np += L.length; for (let i = 0; i < L.length; i += Math.max(1, L.length >> 2)) fp = (fp * 31 + Math.round(L[i][0] * 100) * 7 + Math.round(L[i][1] * 100)) | 0; });
+      fp = fp + ':' + np + ':' + (o.width || '') + ':' + (o.spacing || '');
+      const hit = MASKS.get(keyObj); if (hit && hit.ul === UNDERLAP && hit.fp === fp) return hit;
+      if (!lines) { try { lines = S.objectPieces(o).filter(pc => pc.kind !== 'underlay').map(pc => pc.pts); } catch (e) { return null; } }
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      lines.forEach(l => l.forEach(q => { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }));
+      if (!isFinite(x0)) return null;
+      const pad = 1.5; x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+      const w = Math.max(1, Math.ceil((x1 - x0) / CELL)), h = Math.max(1, Math.ceil((y1 - y0) / CELL));
+      if (w * h > 6e6) return null;
+      let m = new Uint8Array(w * h);
+      lines.forEach(l => { for (let i = 1; i < l.length; i++) { const a = l[i - 1], b = l[i], d = hyp(a, b); if (d > 12) continue; const n = Math.max(1, Math.ceil(d / (CELL * 0.5))); for (let k = 0; k <= n; k++) { const c = Math.floor((a[0] + (b[0] - a[0]) * k / n - x0) / CELL), r = Math.floor((a[1] + (b[1] - a[1]) * k / n - y0) / CELL); if (c >= 0 && r >= 0 && c < w && r < h) m[r * w + c] = 1; } } });
+      const morph = (src2, k, grow) => {
+        if (k <= 0) return src2;
+        const t = new Uint8Array(w * h), out = new Uint8Array(w * h);
+        for (let r = 0; r < h; r++) { const row = r * w; for (let c = 0; c < w; c++) { let v = grow ? 0 : 1; for (let d = -k; d <= k; d++) { const cc = c + d; const s2 = cc < 0 || cc >= w ? 0 : src2[row + cc]; if (grow ? s2 : !s2) { v = grow ? 1 : 0; break; } } t[row + c] = v; } }
+        for (let c = 0; c < w; c++) for (let r = 0; r < h; r++) { let v = grow ? 0 : 1; for (let d = -k; d <= k; d++) { const rr = r + d; const s2 = rr < 0 || rr >= h ? 0 : t[rr * w + c]; if (grow ? s2 : !s2) { v = grow ? 1 : 0; break; } } out[r * w + c] = v; }
+        return out;
+      };
+      const solid = morph(morph(m, 3, true), 3, false);            // close gaps up to ~1.2 mm between rows
+      const res = { x0, y0, w, h, ul: UNDERLAP, near: morph(solid, Math.round(EDGE / CELL), true), deep: morph(solid, Math.round(UNDERLAP / CELL), false), fp, cover: true };
+      MASKS.set(keyObj, res);
+      return res;
+    };
     const maskOf = o => {
       if (o.hidden) return null;
+      if (o.type === 'stitches' || o.type === 'satin') return stitchMaskOf(o);
       let loops = null;
       if (o.type === 'fill' && o.paths) loops = o.paths;
       else if (o.type === 'text' && o.glyphs) loops = o.glyphs.flatMap(g => g.paths || []);
@@ -1031,7 +1065,7 @@
       oi++;
       let pieces = S.objectPieces(o);
       if (!pieces.length) continue;
-      const own = masks[oi], shaped = !!own;
+      const own = masks[oi], shaped = !!own && !own.cover;   // stitch-coverage masks only hide what's under them
       // a connecting line is buried if it stays inside this shape or under a shape sewn later
       // once this shape's top stitches have started, a travel thread across it would lie ON TOP of them,
       // so only a later layer can hide it then (short hops under 2.5 mm stay, they sink into the fill)
