@@ -322,8 +322,33 @@
     }
     return out;
   }
+  // ---------------- basting: a long running stitch sewn first, clamping puffy or slippery
+  // fabric to the stabilizer so it can't bounce with the needle. Own colour block, so the
+  // machine stops after it (keep any thread in), and it pulls out easily afterwards.
+  function bastingObj(objs) {
+    const bs = doc.baste; if (!bs || !bs.on) return null;
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const o of objs) { if (o.hidden) continue; for (const pc of pieces(o)) for (const q of pc.pts) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; } }
+    if (x0 > x1) return null;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, w = x1 - x0, hh = y1 - y0, hp = hoop();
+    let W = hp.w, H = hp.h; if (!(w <= W && hh <= H) && hh <= W && w <= H) { const t = W; W = H; H = t; }   // saved turned for the machine
+    const lim = [cx - W / 2 + 4, cy - H / 2 + 4, cx + W / 2 - 4, cy + H / 2 - 4];   // stay 4 mm inside the hoop's sewing field
+    const m = bs.margin || 8;
+    let r = bs.on === 'hoop' ? lim.slice() : [x0 - m, y0 - m, x1 + m, y1 + m];
+    r = [Math.max(r[0], lim[0]), Math.max(r[1], lim[1]), Math.min(r[2], lim[2]), Math.min(r[3], lim[3])];
+    if (r[0] > x0 - 1 || r[1] > y0 - 1 || r[2] < x1 + 1 || r[3] < y1 + 1) r = [Math.min(r[0], x0 - 2), Math.min(r[1], y0 - 2), Math.max(r[2], x1 + 2), Math.max(r[3], y1 + 2)];
+    const corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]], [r[0], r[1]]], L = bs.len || 5, pts = [corners[0]];
+    for (let i = 1; i < corners.length; i++) { const a = corners[i - 1], b = corners[i], n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / L)); for (let k = 1; k <= n; k++) pts.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); }
+    const lines = [pts];
+    if (bs.cross) {   // extra tack lines through the middle, for very puffy jackets (sewn over by the design)
+      const run = (a, b) => { const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / L)), q = []; for (let k = 0; k <= n; k++) q.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); return q; };
+      lines.push(run([cx, r[1]], [cx, r[3]]), run([r[0], cy], [r[2], cy]));
+    }
+    return { id: '__baste', type: 'stitches', name: 'Basting (any thread)', threadName: 'Basting — any thread', color: '#bdbdbd', lines };
+  }
   function design(viewOnly) {
-    const objs = expand(viewOnly ? doc.objects.filter(inView) : doc.objects);
+    let objs = expand(viewOnly ? doc.objects.filter(inView) : doc.objects);
+    if (!viewOnly) { const b = bastingObj(objs); if (b) objs = [b].concat(objs); }
     // build with the cached pieces
     const fake = objs.map(o => Object.assign({}, o, { __p: pieces(o) }));
     const orig = S.objectPieces;
@@ -3289,6 +3314,33 @@
   }
 
   const FABRICS = [['#f4f3ef', 'White'], ['#e9e7e1', 'Natural'], ['#1a1a1c', 'Black'], ['#1c2541', 'Navy'], ['#2648a8', 'Royal blue'], ['#8e1b1b', 'Red'], ['#7d8086', 'Gray'], ['#c8b48a', 'Khaki'], ['#2f4f2f', 'Forest']];
+  function bastingUI() {
+    const bs = doc.baste || {}, v = bs.on || 'off';
+    return `<h3 style="margin-top:14px">Hold the fabric down</h3>
+      <div class="row"><label>Basting</label><div class="toggle" id="bstOn"><button data-v="off" class="${v === 'off' ? 'on' : ''}">Off</button><button data-v="design" class="${v === 'design' ? 'on' : ''}">Around design</button><button data-v="hoop" class="${v === 'hoop' ? 'on' : ''}">Around hoop</button></div></div>
+      ${v !== 'off' ? `<div class="row"><label>Middle tack</label><div class="toggle" id="bstX"><button data-v="0" class="${!bs.cross ? 'on' : ''}">Box only</button><button data-v="1" class="${bs.cross ? 'on' : ''}">Box + cross</button></div></div>` : ''}
+      <p class="small" style="margin:0 0 6px">${v === 'off' ? 'Turn on for puffer jackets, fleece or anything that bounces — a long tack stitch sews first and clamps the fabric to the backing, so thread doesn’t nest underneath.' : 'Sews first as its own colour (grey in the file) — when the machine stops, keep any thread in. Snip and pull the long stitches out when you’re done.'}</p>
+      <div class="btns" style="margin:4px 0 0">${btn('pufPrep', '🧥 Puffer jacket prep')}</div>`;
+  }
+  function bindBasting(rerender) {
+    const t = $('#bstOn'); if (t) t.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.baste = Object.assign({}, doc.baste, { on: b2.dataset.v === 'off' ? null : b2.dataset.v }); previewCache = null; commit(); rerender(); draw(); }));
+    const x = $('#bstX'); if (x) x.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.baste = Object.assign({}, doc.baste, { cross: b2.dataset.v === '1' }); previewCache = null; commit(); rerender(); draw(); }));
+    on('pufPrep', () => { pufferPrep(); rerender(); });
+  }
+  // puffy jacket settings in one go: open up max-density fills, underlay everywhere, basting on
+  function pufferPrep() {
+    let fills = 0, under = 0, imports = 0;
+    const walk = o => {
+      if (o.type === 'group' && o.children) { o.children.forEach(walk); return; }
+      if (o.type === 'import' || o.type === 'stitches') { imports++; return; }
+      if ((o.type === 'fill' && !o.satinLook) || o.type === 'text') { if ((o.spacing || 0.4) < 0.42) { o.spacing = 0.42; fills++; } }
+      if ('underlay' in o || o.type === 'fill' || o.type === 'satin' || o.type === 'text') { if (o.underlay === false) under++; o.underlay = true; }
+    };
+    doc.objects.forEach(walk);
+    doc.baste = Object.assign({ cross: false }, doc.baste, { on: (doc.baste && doc.baste.on) || 'design' });
+    previewCache = null; commit(); draw();
+    toast(`Puffer prep: basting on${fills ? ', ' + fills + ' fill' + (fills > 1 ? 's' : '') + ' opened to 0.42 mm' : ''}${under ? ', underlay added to ' + under : ''}${imports ? ' — imported stitches left as they are' : ''}. Sew at medium speed.`);
+  }
   function renderPreviewSheet() {
     const d = previewCache || (previewCache = design(solo != null));
     const b = d.bounds, wmm = b[2] - b[0], hmm = b[3] - b[1];
@@ -3299,8 +3351,10 @@
       `${(() => { const fi = fitInfo(d); return fi ? `<p class="small" style="margin:0 0 8px;color:${fi.fits || fi.fitsRot ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Fits the ' + hoopDef().name + ' hoop' : fi.fitsRot ? '⟳ Fits the ' + hoopDef().name + ' hoop if rotated' : fi.machine ? '✗ Too big for the ' + hoopDef().name + ' hoop — pick a bigger hoop' : '✗ Bigger than the Topaz 30 can stitch (14.17 × 7.87 in)'}</p>` : ''; })()}<div class="stats"><span>Stitches</span><b>${d.count.toLocaleString()}</b><span>Size</span><b>${(wmm / 25.4).toFixed(2)} × ${(hmm / 25.4).toFixed(2)} in</b><span>Thread changes</span><b>${d.colors.length}</b><span>Trims</span><b>${d.trims}</b><span>Est. sew time</span><b>~${mins} min</b></div>`,
       `<div class="swatches" style="margin-top:10px">${d.colors.map((c, i) => `<span class="sw" title="${i + 1}" style="background:${c.color}"></span>`).join('')}</div>`,
       `<h3 style="margin-top:14px">Fabric</h3><div class="swatches" id="fabSw">${FABRICS.map(([c, n]) => `<button class="sw ${c === (doc.fabric || '#e9e7e1') ? 'on' : ''}" data-f="${c}" style="background:${c}" aria-label="${n}" title="${n}"></button>`).join('')}</div>`,
+      bastingUI(),
       `<div class="btns" style="margin-top:12px">${btn('xVp3', 'Export VP3', 'primary')}${btn('xDst', 'Export DST')}${btn('xSplit', '✂ Split into parts…')}${btn('xMH', '▦ Multi-hoop (smaller hoops)…')}</div></div>`];
     mount(parts);
+    bindBasting(renderPreviewSheet);
     on('xVp3', () => exportFile('vp3')); on('xDst', () => exportFile('dst')); on('xSplit', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderSplitSheet(); }); on('xMH', () => { if (preview) { preview = false; $('#bPreview').classList.remove('on'); draw(); } renderMultiHoopSheet(); });
     sheet.querySelectorAll('[data-f]').forEach(b2 => b2.addEventListener('click', () => { doc.fabric = b2.dataset.f; autosave(); renderSheet(); draw(); }));
   }
@@ -3389,8 +3443,10 @@
       <p class="small" style="margin:0 0 6px">The Topaz 30 holds the long hoops (Royal, Crown, Jewel) with the long side running front-to-back. A design wider than the hoop is across is saved turned 90°, top pointing <b>left</b>, so it fits — hoop the garment the same way (collar/top to the left).</p>`);
     const fi = fitInfo(design());
     if (fi) parts.push(`<p class="small" style="margin:6px 0 0;color:${fi.fits ? 'var(--ok)' : '#ff8a8d'}">${fi.fits ? '✓ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) fits this hoop.' : (fi.fitsRot ? '⟳ Fits if you rotate the hoop.' : '✗ Your design (' + inch(fi.w) + ' × ' + inch(fi.h) + ' in) is bigger than this hoop.')}</p>`);
+    parts.push(bastingUI());
     parts.push(`<div class="btns" style="margin-top:10px">${btn('hDone', 'Done', 'primary')}${btn('hMore', 'Resize design…')}</div></div>`);
     mount(parts);
+    bindBasting(renderHoopSheet);
     sheet.querySelectorAll('[data-hoop]').forEach(el => el.addEventListener('click', () => { doc.hoopId = el.dataset.hoop; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
     $('#hTurn').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.machineTurn = b2.dataset.v; autosave(); renderHoopSheet(); }));
     $('#hRot').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.hoopRot = b2.dataset.v === '1'; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
@@ -3567,7 +3623,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, startEraser, eraseStitches, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
+    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, pufferPrep, startEraser, eraseStitches, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
