@@ -274,10 +274,11 @@
   }
 
   // ---------------- layers panel (always visible), drag to reorder
-  let layerSig = '', dragFrom = null;
+  let layerSig = '', dragFrom = null; const thrShut = new Set();
   function renderLayers() {
     const d = SS.doc(), sid = SS.selId(), mids = SS.multiIds(), so = SS.solo(), ol = SS.orderMode() ? SS.orderList() : [];
-    const sig = ol.join(',') + '#' + so + '|' + mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
+    const tf = d.objects.filter(o => o.type === 'import').map(o => JSON.stringify(SS.threadRows(o).map(t => [t.block, t.on, t.n]))).join('') + [...thrShut].join(',');
+    const sig = tf + ol.join(',') + '#' + so + '|' + mids.join(',') + JSON.stringify(d.objects.map(o => [o.id, o.name, o.color, o.hidden, o.type, o.blocks ? o.blocks.map(b => b.color) : 0])) + '|' + sid + '|' + !!d.bg + !!d.bgOnTop + !!d.bgHidden + SS.bgSelected();
     if (sig === layerSig) return; layerSig = sig;
     const box = $('#pcLayers');
     if (!d.objects.length && !d.bg) { box.innerHTML = '<div class="small" style="padding:12px">No layers yet. Open a picture (Ctrl+O / drop it here), then trace it, Pick colours or Auto-digitize.</div>'; return; }
@@ -285,8 +286,12 @@
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
       return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || !SS.inView(o) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
         <span class="num" ${ol.includes(o.id) ? `style="background:${SS.pickKind() === 'iso' ? '#4cc2ff' : '#f2b134'};color:#16181d;border-radius:999px;font-weight:700"` : ''}>${ol.includes(o.id) ? (SS.pickKind() === 'iso' ? '◎' : '#' + (ol.indexOf(o.id) + 1)) : i + 1}</span><span class="dot" style="background:${dot}"></span>
-        <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}</small></span>
-        <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`;
+        <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}${o.type === 'import' ? ' · ' + o.blocks.length + ' threads' : ''}</small></span>
+        ${o.type === 'import' && o.blocks.length > 1 ? `<button class="eye" data-tog="1" title="${!thrShut.has(o.id) ? 'Hide' : 'Show'} its threads"><svg viewBox="0 0 24 24">${!thrShut.has(o.id) ? '<path d="m6 15 6-6 6 6"/>' : '<path d="m6 9 6 6 6-6"/>'}</svg></button>` : ''}
+        <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>
+${o.type === 'import' && o.blocks.length > 1 && !thrShut.has(o.id) ? SS.threadRows(o).map(t => `<div class="lr thr ${t.on ? 'on' : ''}" data-tid="${o.id}" data-k="${t.k}" style="padding-left:26px;min-height:0">
+        <span class="num" style="font-weight:700">${t.block ? '#' + t.block : t.k + 1}</span><span class="dot" style="background:${t.color};width:13px;height:13px"></span>
+        <span class="nm"><b style="font-weight:500">${t.name ? esc(t.name) : 'Thread ' + (t.k + 1)}</b><small>${t.color} · ${t.n.toLocaleString()} st</small></span></div>`).join('') : ''}`;
     }).join('');
     if (d.bg) {
       const row = `<div class="lr ${SS.bgSelected() ? 'on' : ''} ${d.bgHidden ? 'hid' : ''}" data-pic="1"><span class="num">–</span><span class="dot" style="background:#666;border-radius:4px"></span>
@@ -298,9 +303,10 @@
       const pr = box.querySelector('[data-pic]');
       pr.addEventListener('click', e => { if (e.target.closest('[data-pf]')) { SS.flipPic('h'); return; } if (e.target.closest('[data-pt]')) { SS.picTop(); return; } if (e.target.closest('[data-pe]')) { SS.toggleBg(); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); SS.selectPic(); });
     }
+    box.querySelectorAll('.lr[data-tid]').forEach(el => el.addEventListener('click', () => { const o = d.objects.find(x => x.id === +el.dataset.tid); SS.focusThread(o, +el.dataset.k); layerSig = ''; renderLayers(); }));
     box.querySelectorAll('.lr[data-id]').forEach(el => {
       const o = d.objects.find(x => x.id === +el.dataset.id);
-      el.addEventListener('click', e => { if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.orderMode()) { SS.orderToggle(o.id); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
+      el.addEventListener('click', e => { if (e.target.closest('[data-tog]')) { if (thrShut.has(o.id)) thrShut.delete(o.id); else thrShut.add(o.id); layerSig = ''; renderLayers(); return; } if (e.target.closest('[data-eye]')) { o.hidden = !o.hidden; SS.commit(); SS.draw(); return; } if (SS.orderMode()) { SS.orderToggle(o.id); layerSig = ''; renderLayers(); return; } if (SS.tool() !== 'select') SS.setTool('select', true); if (e.ctrlKey || e.metaKey) { SS.toggleMulti(o.id); layerSig = ''; renderLayers(); return; } SS.select(o.id); });
       el.addEventListener('contextmenu', e => { e.preventDefault(); SS.setSolo(o.id); layerSig = ''; renderLayers(); SS.toast(SS.solo() === o.id ? 'Showing only “' + (o.name || TYPE[o.type]) + '” — right-click it again (or Show all) to bring the rest back' : 'All layers shown'); });
       el.addEventListener('dblclick', e => { if (e.target.closest('[data-eye]')) return; const n = prompt('Layer name', o.name || ''); if (n != null) { o.name = n; SS.commit(); SS.renderSheet(); SS.draw(); } });
       el.addEventListener('dragstart', e => { dragFrom = o; e.dataTransfer.effectAllowed = 'move'; });
@@ -318,6 +324,7 @@
     clearTimeout(statT); statT = setTimeout(() => {
       let ds; try { ds = SS.design(); } catch (e) { return; }
       const b = ds.bounds;
+      renderLayers();
       $('#stN').textContent = ds.count.toLocaleString(); $('#stC').textContent = ds.colors.length; $('#stT').textContent = ds.trims;
       $('#stS').textContent = ds.count ? `${inch(b[2] - b[0])} × ${inch(b[3] - b[1])} in` : '–';
       $('#stM').textContent = ds.count ? '~' + Math.round(ds.count / 600 + ds.trims * 0.1 + ds.colors.length * 0.5) + ' min' : '–';

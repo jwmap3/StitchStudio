@@ -1096,7 +1096,7 @@
         if (curColor !== null) { trim(); st.push({ x: pos ? pos[0] : 0, y: pos ? pos[1] : 0, c: COLOR }); }
         curColor = col; colors.push({ color: col, name: o.threadName || '' });
       }
-      objIndexStart.push({ id: o.id, at: st.length });
+      objIndexStart.push({ id: o.id, at: st.length, block: colors.length });   // block = machine colour-block number (1-based)
       for (const pc of pieces) {
         const first = pc.pts[0];
         if (pos && !needTie) {

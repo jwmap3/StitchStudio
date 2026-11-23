@@ -346,6 +346,8 @@
     }
     return { id: '__baste', type: 'stitches', name: 'Basting (any thread)', threadName: 'Basting — any thread', color: '#bdbdbd', lines };
   }
+  // machine colour-block number of every sewn object (and of every thread of an imported design: "<id>:<k>")
+  let blockMap = {}, blockMapN = 0, threadFocus = null;
   function design(viewOnly) {
     let objs = expand(viewOnly ? doc.objects.filter(inView) : doc.objects);
     if (!viewOnly) { const b = bastingObj(objs); if (b) objs = [b].concat(objs); }
@@ -353,7 +355,11 @@
     const fake = objs.map(o => Object.assign({}, o, { __p: pieces(o) }));
     const orig = S.objectPieces;
     S.objectPieces = o => o.__p || orig(o);
-    try { return S.build(fake, { knockout: doc.knockout !== false }); } finally { S.objectPieces = orig; }
+    try {
+      const res = S.build(fake, { knockout: doc.knockout !== false });
+      if (!viewOnly) { const m = {}; (res.objIndexStart || []).forEach(e => { if (m[e.id] == null) m[e.id] = e.block; }); blockMap = m; blockMapN = res.colors.length; }
+      return res;
+    } finally { S.objectPieces = orig; }
   }
 
   // ---------------- drawing
@@ -607,7 +613,26 @@
     ctx.save(); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]); ctx.strokeRect(x, y, x2 - x, y2 - y); ctx.setLineDash([]);
     ctx.fillStyle = '#4cc2ff'; ctx.beginPath(); ctx.arc(x2, y2, 9, 0, 7); ctx.fill(); ctx.strokeStyle = '#16181d'; ctx.stroke(); ctx.restore();
   }
+  function drawThreadFocus() {
+    if (!threadFocus) return;
+    const o = doc.objects.find(x => x.id === threadFocus.id);
+    if (!o || o.type !== 'import' || !o.blocks[threadFocus.k] || selId !== o.id) return;
+    ctx.save(); ctx.strokeStyle = 'rgba(76,194,255,.9)'; ctx.lineWidth = 1.2; ctx.shadowColor = '#4cc2ff'; ctx.shadowBlur = 6;
+    ctx.beginPath(); o.blocks[threadFocus.k].lines.forEach(l => l.forEach((q, i) => { const [x, y] = toPX(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); })); ctx.stroke(); ctx.restore();
+  }
+  function focusThread(o, k) {
+    if (!o || o.type !== 'import') return;
+    threadFocus = { id: o.id, k }; renderProps.blk = k;
+    if (selId !== o.id) { selId = o.id; multi.clear && multi.clear(); }
+    if (tool !== 'select') setTool('select', true); else { renderSheet(); }
+    draw();
+  }
+  function threadRows(o) {   // the threads of an imported design, in sewing order, with their machine colour-block numbers
+    if (!o || o.type !== 'import') return [];
+    return o.blocks.map((bl, k) => ({ k, color: bl.color, name: bl.name && !/^Thread \d+$/.test(bl.name) ? bl.name : '', block: blockMap[o.id + ':' + k] || null, n: bl.lines.reduce((s2, l) => s2 + l.length, 0), on: !!(threadFocus && threadFocus.id === o.id && threadFocus.k === k && selId === o.id) }));
+  }
   function drawHandles(o) {
+    if (o.type === 'import') drawThreadFocus();
     ctx.save();
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#f2b134'; ctx.setLineDash([5, 4]);
     if (o.type === 'fill') o.paths.forEach(l => { ctx.beginPath(); l.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.stroke(); });
@@ -3048,14 +3073,16 @@
       const k = Math.min(o.blocks.length - 1, renderProps.blk || 0);
       parts.length = 1;
       parts[0] = `<div class="sec"><h3>${esc(o.name)} · Imported design</h3><p class="small" style="margin:0 0 6px">${o.blocks.length} threads, kept stitch for stitch. Drag inside the box to move it. Use Sew earlier / later (or Layers) to put it over or under other layers.</p>`;
-      parts.push(`<div class="swatches" id="impBlk">${o.blocks.map((bl, i) => `<button class="sw ${i === k ? 'on' : ''}" data-i="${i}" style="background:${bl.color}" title="${esc(bl.name)}"></button>`).join('')}</div><p class="small" style="margin:6px 0">Thread ${k + 1}: ${esc(o.blocks[k].name)} — pick a new colour:</p>`);
+      const trs = threadRows(o);
+      parts.push(`<h3 style="margin:10px 0 6px">Threads in sewing order</h3><div id="impBlk" style="display:flex;flex-direction:column;gap:2px;max-height:300px;overflow:auto">${trs.map(t => `<button data-i="${t.k}" style="display:flex;align-items:center;gap:10px;text-align:left;padding:6px 8px;border-radius:8px;border:1px solid ${t.k === k ? '#4cc2ff' : 'transparent'};background:${t.k === k ? 'rgba(76,194,255,.12)' : 'transparent'};color:inherit;font:inherit;cursor:pointer"><span style="min-width:34px;font-weight:700">${t.block ? '#' + t.block : t.k + 1}</span><span style="width:18px;height:18px;border-radius:50%;background:${t.color};flex:none;border:1px solid rgba(255,255,255,.25)"></span><span style="flex:1;min-width:0"><span style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.name ? esc(t.name) : 'Thread ' + (t.k + 1)}</span><span class="small" style="opacity:.75">${t.color} · ${t.n.toLocaleString()} st</span></span></button>`).join('')}</div><p class="small" style="margin:6px 0">${trs[k] && trs[k].block ? 'Colour block #' + trs[k].block + ' of ' + blockMapN + ' on the machine — h' : 'H'}ighlighted on the design. Pick a new colour for thread ${k + 1}:</p>`);
       parts.push(colorPicker(o.blocks[k].color, c => { o.blocks[k].color = c; if (k === 0) o.color = c; commit(); renderSheet(); draw(); }));
       parts.push(transformPanel(o));
       parts.push(`</div><div class="sec"><h3>Edit the stitches</h3><div class="btns">${btn('pErase', '🧽 Erase stitches')}${btn('pCut', '✂ Cut out area')}${o.blocks.length > 1 ? btn('pDelThr', '🗑 Delete thread ' + (k + 1)) : ''}${btn('pRestitch', '✨ Make editable shapes')}</div><p class="small" style="margin:6px 0 0">Erase rubs out stitches under the brush (all threads, or just one). Cut out removes — or keeps — everything inside a loop you draw. Make editable shapes turns each thread into normal fill layers you can reshape point by point.</p></div><div class="sec"><div class="btns">${o.blocks.length > 1 ? btn('pIso', '✂ Isolate colour') : ''}${btn('pUp', 'Sew earlier')}${btn('pDown', 'Sew later')}${btn('pDup', 'Duplicate')}${btn('pDel', 'Delete', 'danger')}</div></div>`);
       mount(parts); bindTransform(o);
       on('pSolo', () => setSolo(o.id));
     on('pIso', () => { isoArm = true; hint('Tap the stitches of the colour to split off'); toast('Now tap the colour you want as its own layer'); });
-      $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => { renderProps.blk = +b2.dataset.i; renderSheet(); }));
+      $('#impBlk').querySelectorAll('[data-i]').forEach(b2 => b2.addEventListener('click', () => focusThread(o, +b2.dataset.i)));
+      if (!threadFocus || threadFocus.id !== o.id) { threadFocus = { id: o.id, k }; draw(); }
       on('pDel', () => { doc.objects = doc.objects.filter(x => x !== o); selId = null; commit(); renderSheet(); draw(); });
       on('pDup', () => { const c = JSON.parse(JSON.stringify(o)); delete c.id; translate(c, 5, 5); addObject(c); });
       on('pUp', () => move(o, -1)); on('pDown', () => move(o, 1));
@@ -3287,6 +3314,7 @@
         <button class="ib" data-a="up" aria-label="Sew earlier"><svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg></button>
         <button class="ib" data-a="down" aria-label="Sew later"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <button class="ib" data-a="eye" aria-label="Show or hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.5-1"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
+      if (o.type === 'import' && o.blocks.length > 1) threadRows(o).forEach(t => parts.push(`<div class="layer thr ${t.on ? 'on' : ''}" data-tid="${o.id}" data-k="${t.k}" style="padding-left:30px"><span class="meta" style="width:34px;text-align:right;font-weight:700;color:var(--fg,#eee)">${t.block ? '#' + t.block : (t.k + 1)}</span><span class="dot" style="background:${t.color};width:14px;height:14px"></span><span class="nm" style="font-size:14px">${t.name ? esc(t.name) : 'Thread ' + (t.k + 1)}<br><span class="meta">${t.color} · ${t.n.toLocaleString()} st${t.block ? ' · colour block ' + t.block : ''}</span></span></div>`));
     });
     if (doc.bg) parts.push(`<div class="layer ${bgSel ? 'on' : ''}" data-bg="1"><span class="dot" style="background:#555;border-radius:4px"></span><span class="nm">Picture (not stitched)<br><span class="meta">${inch(doc.bg.w)} × ${inch(doc.bg.h)} in · ${doc.bgOnTop ? 'on top (see-through)' : 'underneath'}</span></span><button class="ib" data-a="bgeye" aria-label="Show or hide picture"><svg viewBox="0 0 24 24">${doc.bgHidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>`);
     parts.push('</div>');
@@ -3302,6 +3330,7 @@
     });
     const bgRow = sheet.querySelector('[data-bg]');
     if (bgRow) bgRow.addEventListener('click', e => { if (e.target.closest('button')) { doc.bgHidden = !doc.bgHidden; autosave(); renderSheet(); draw(); return; } selId = null; bgSel = true; setTool('select', true); });
+    sheet.querySelectorAll('.layer[data-tid]').forEach(el => el.addEventListener('click', () => focusThread(doc.objects.find(x => x.id === +el.dataset.tid), +el.dataset.k)));
     sheet.querySelectorAll('.layer[data-id]').forEach(el => {
       const o = doc.objects.find(x => x.id === +el.dataset.id);
       el.addEventListener('click', e => {
@@ -3623,7 +3652,7 @@
     Render, Stitch: S, hitObject, IN, threadName,
     selectPic() { if (!doc.bg) return; selId = null; bgSel = true; renderSheet(); draw(); },
     picTop(on) { if (!doc.bg) { toast('Open a picture first'); return; } doc.bgOnTop = on == null ? !doc.bgOnTop : !!on; autosave(); renderSheet(); draw(); toast(doc.bgOnTop ? 'Picture on top (see-through — it is not stitched)' : 'Picture under the stitches'); },
-    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, pufferPrep, startEraser, eraseStitches, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
+    alignPending: () => !!alignA, straightenMode: () => alignChain, setStraighten, threadRows, focusThread, blockMap: () => blockMap, blockCount: () => blockMapN, pufferPrep, startEraser, eraseStitches, hitNode, alignPick, alignCancel() { if (alignChain) { setStraighten(false); return; } if (alignA || alignArm) { alignA = null; alignArm = false; hint(''); selNode = -1; draw(); } },
     bgSelected: () => bgSel && tool === 'select',
     bgShown: () => !!(doc.bg && !doc.bgHidden), toggleBg() { doc.bgHidden = !doc.bgHidden; autosave(); draw(); },
   };
