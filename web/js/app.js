@@ -16,7 +16,7 @@
     { id: 'jewel', name: 'Jewel', w: 240, h: 150, tag: 'Optional' },
     { id: 'metal180', name: 'Metal hoop', w: 180, h: 130, tag: 'Optional' },
     { id: 'small100', name: 'Small square', w: 100, h: 100, tag: 'Optional (4 × 4 in)' },
-    { id: 'custom', name: 'Custom size', w: 150, h: 150, tag: 'Up to 360 × 200 mm' },
+    { id: 'custom', name: 'Custom size', w: 150, h: 150, tag: 'Any size you type' },
   ];
   // full thread chart: common 40 wt embroidery thread shades (generic names)
   const CHART = [
@@ -64,7 +64,7 @@
   const hoopDef = () => HOOPS.find(h => h.id === doc.hoopId) || HOOPS[0];
   const hoop = () => {
     const d = hoopDef(); let w = d.w, h = d.h;
-    if (d.id === 'custom') { w = Math.min(MAXF.w, Math.max(20, (doc.customHoop || {}).w || 150)); h = Math.min(MAXF.w, Math.max(20, (doc.customHoop || {}).h || 150)); if (Math.min(w, h) > MAXF.h) { if (w < h) w = MAXF.h; else h = MAXF.h; } }
+    if (d.id === 'custom') { const c = doc.customHoop || {}; w = Math.min(1500, Math.max(10, +c.w || 150)); h = Math.min(1500, Math.max(10, +c.h || 150)); }   // any size you like (canvas, banners…); the fit check still warns past the machine's field
     return doc.hoopRot ? { name: d.name, w: h, h: w } : { name: d.name, w, h };
   };
   // does the design (bounds in mm) fit the chosen hoop? (either way round, since the machine can rotate designs)
@@ -3464,9 +3464,16 @@
     HOOPS.forEach(h => {
       const on = h.id === cur.id;
       const dims = h.id === 'custom' ? `${inch((doc.customHoop || {}).w || 150)} × ${inch((doc.customHoop || {}).h || 150)} in` : `${inch(h.w)} × ${inch(h.h)} in · ${h.w} × ${h.h} mm`;
-      parts.push(`<div class="layer ${on ? 'on' : ''}" data-hoop="${h.id}" style="cursor:pointer"><span class="dot" style="border-radius:6px;background:${on ? 'var(--accent)' : 'transparent'}"></span><span class="nm"><b>${h.name}</b> — ${dims}<br><span class="meta">${h.tag}</span></span></div>`);
+      parts.push(`<div class="layer ${on ? 'on' : ''}" data-hoop="${h.id}" style="cursor:pointer"><span class="dot" style="border-radius:6px;background:${on ? 'var(--accent)' : 'transparent'}"></span><span class="nm"><b>${h.name}</b> — <span ${h.id === 'custom' ? 'id="cDims"' : ''}>${dims}</span><br><span class="meta">${h.tag}</span></span></div>`);
     });
-    if (cur.id === 'custom') parts.push(`<div class="row"><label>Width</label><input type="number" id="cW" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).w || 150)}"><span class="val">in</span></div><div class="row"><label>Height</label><input type="number" id="cH" step="0.1" min="0.8" max="14.17" value="${inch((doc.customHoop || {}).h || 150)}"><span class="val">in</span></div><p class="small" style="margin:0">The Topaz 30 can stitch up to 14.17 × 7.87 in (360 × 200 mm).</p>`);
+    if (cur.id === 'custom') {
+      const cu = doc.customUnit === 'mm' ? 'mm' : 'in', cv = v => cu === 'mm' ? Math.round(v) : inch(v);
+      const c = doc.customHoop || { w: 150, h: 150 }, big = Math.max(c.w, c.h) > MAXF.w + 0.01 || Math.min(c.w, c.h) > MAXF.h + 0.01;
+      parts.push(`<div class="row"><label>Units</label><div class="toggle" id="cU"><button data-v="in" class="${cu === 'in' ? 'on' : ''}">inches</button><button data-v="mm" class="${cu === 'mm' ? 'on' : ''}">mm</button></div></div>
+        <div class="row"><label>Width</label><input type="number" inputmode="decimal" id="cW" step="${cu === 'mm' ? 1 : 0.1}" min="${cu === 'mm' ? 10 : 0.4}" value="${cv(c.w)}"><span class="val">${cu}</span></div>
+        <div class="row"><label>Height</label><input type="number" inputmode="decimal" id="cH" step="${cu === 'mm' ? 1 : 0.1}" min="${cu === 'mm' ? 10 : 0.4}" value="${cv(c.h)}"><span class="val">${cu}</span></div>
+        <p class="small" id="cNote" style="margin:0;${big ? 'color:#f2b134' : ''}">${big ? 'Bigger than the Topaz 30 can sew in one hooping (14.17 × 7.87 in / 360 × 200 mm) — fine for planning a canvas or layout; split it into hoopings to sew.' : 'The canvas resizes as you type. The Topaz 30 sews up to 14.17 × 7.87 in (360 × 200 mm) per hooping.'}</p>`);
+    }
     parts.push(`<div class="row"><label>Orientation</label><div class="toggle" id="hRot"><button data-v="0" class="${!doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Landscape' : 'Normal'}</button><button data-v="1" class="${doc.hoopRot ? 'on' : ''}">${hoopDef().w >= hoopDef().h ? 'Portrait' : 'Rotated'}</button></div></div>`);
     parts.push(`<div class="row"><label>When saving</label><div class="toggle" id="hTurn"><button data-v="auto" class="${doc.machineTurn !== 'off' ? 'on' : ''}">Turn for machine</button><button data-v="off" class="${doc.machineTurn === 'off' ? 'on' : ''}">Keep as drawn</button></div></div>
       <p class="small" style="margin:0 0 6px">The Topaz 30 holds the long hoops (Royal, Crown, Jewel) with the long side running front-to-back. A design wider than the hoop is across is saved turned 90°, top pointing <b>left</b>, so it fits — hoop the garment the same way (collar/top to the left).</p>`);
@@ -3480,8 +3487,17 @@
     $('#hTurn').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.machineTurn = b2.dataset.v; autosave(); renderHoopSheet(); }));
     $('#hRot').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.hoopRot = b2.dataset.v === '1'; autosave(); updateHoopChip(); fit(); renderHoopSheet(); }));
     const cw = $('#cW'), ch = $('#cH');
-    const setC = () => { doc.customHoop = { w: Math.min(MAXF.w, parseFloat(cw.value) * IN || 150), h: Math.min(MAXF.w, parseFloat(ch.value) * IN || 150) }; autosave(); updateHoopChip(); fit(); };
-    if (cw) { cw.addEventListener('change', setC); ch.addEventListener('change', setC); }
+    const k = () => doc.customUnit === 'mm' ? 1 : IN;
+    const setC = () => {
+      const w = parseFloat(cw.value) * k(), h = parseFloat(ch.value) * k();
+      if (!(w >= 10) || !(h >= 10)) return;   // still typing
+      doc.customHoop = { w: Math.min(1500, w), h: Math.min(1500, h) }; previewCache = null; autosave(); updateHoopChip(); fit(); draw();
+      const dd = $('#cDims'); if (dd) dd.textContent = `${inch(doc.customHoop.w)} × ${inch(doc.customHoop.h)} in`;
+      const big = Math.max(w, h) > MAXF.w + 0.01 || Math.min(w, h) > MAXF.h + 0.01, n = $('#cNote');
+      if (n) { n.style.color = big ? '#f2b134' : ''; n.textContent = big ? 'Bigger than the Topaz 30 can sew in one hooping (14.17 × 7.87 in / 360 × 200 mm) — fine for planning a canvas or layout; split it into hoopings to sew.' : 'The canvas resizes as you type. The Topaz 30 sews up to 14.17 × 7.87 in (360 × 200 mm) per hooping.'; }
+    };
+    if (cw) { ['input', 'change'].forEach(ev => { cw.addEventListener(ev, setC); ch.addEventListener(ev, setC); }); }
+    const cU = $('#cU'); if (cU) cU.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { doc.customUnit = b2.dataset.v; autosave(); renderHoopSheet(); }));
     on('hDone', () => renderSheet());
     on('hMore', () => renderSizeSheet());
   }
