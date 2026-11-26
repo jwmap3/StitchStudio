@@ -45,7 +45,8 @@
   let quickTol = 40;
   let stroke = null;             // live brush stroke
   let autoPickSrc = false;      // Auto: next tap on the picture adds its colour to the palette
-  let drawKind = 'fill';         // Draw tool: fill | satin | run
+  let drawKind = 'shape';        // Draw tool: shape | fill | satin | run
+  let shapeCorner = false, shapeStitch = 'fill', shapeClosed = true;   // Shape tool: next point kind, stitch, closed
   let fillTrace = 'freehand';    // Draw → Fill: 'freehand' (lasso) | 'points'
   const pick = { scope: 'area', tol: 40, density: 0.32, style: 'satin', thread: null, edge: 'none', edgeW: 2, edgeCol: null };   // Pick tool
   let persp = null;              // fix-perspective mode: { pts: [TL, TR, BR, BL] in mm }
@@ -538,7 +539,7 @@
 
   function shapeNodes(o) {
     if (o.type === 'fill') return o.paths.flatMap((l, li) => l.map((p, pi) => ({ p, li, pi })));
-    if (o.type === 'satin' || o.type === 'run') return o.points.map((p, pi) => ({ p, li: 0, pi }));
+    if (o.type === 'satin' || o.type === 'run' || o.type === 'shape') return o.points.map((p, pi) => ({ p, li: 0, pi }));
     if (o.type === 'text') return [{ p: [o.x, o.y], li: 0, pi: 0 }];
     if (o.type === 'stitches' || o.type === 'import') return [];
     return [];
@@ -647,6 +648,7 @@
       }
     }
     if (o.type === 'fill' && o.flow) { ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2.5; o.flow.forEach(g => { ctx.beginPath(); g.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); const a = g[g.length - 2] || g[0], b = g[g.length - 1], [bx, by] = toPX(b), [ax, ay] = toPX(a), an = Math.atan2(by - ay, bx - ax); ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an - .5), by - 10 * Math.sin(an - .5)); ctx.moveTo(bx, by); ctx.lineTo(bx - 10 * Math.cos(an + .5), by - 10 * Math.sin(an + .5)); ctx.stroke(); }); ctx.restore(); }
+    if (o.type === 'shape') { const P = S.shapePath(o); ctx.beginPath(); P.forEach((q, i) => { const [x, y] = toPX(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (o.closed) ctx.closePath(); ctx.stroke(); }
     if (o.type === 'satin' && o.mode === 'rails') { ctx.restore(); ctx.save(); drawColumnGuide(o, false); }
     else if (o.type === 'satin' || o.type === 'run') {
       ctx.beginPath(); o.points.forEach((p, i) => { const [x, y] = toPX(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
@@ -665,7 +667,7 @@
     const dotR = Math.max(2.5, Math.min(7, gap / 2.6));
     if (o.type !== 'text' || true) shapeNodes(o).forEach((n, i) => {
       const [x, y] = toPX(n.p);
-      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2);
+      ctx.beginPath(); if (o.type === 'shape' && n.p[2]) ctx.rect(x - dotR, y - dotR, dotR * 2, dotR * 2); else ctx.arc(x, y, dotR, 0, Math.PI * 2);
       const on = o.type === 'text' ? false : flatIndex(o, n) === selNode;
       ctx.fillStyle = on ? '#f2b134' : (o.type === 'satin' && o.mode === 'rails' ? (i % 2 ? '#2f6bff' : '#1530c8') : '#ffffff'); ctx.fill();
       ctx.lineWidth = dotR > 4 ? 2 : 1; ctx.strokeStyle = '#16181d'; ctx.stroke();
@@ -675,7 +677,7 @@
   // tap on an edge of the selected shape -> new point there
   function insertPoint(o, p) {
     const tol = 12 / view.s;
-    const lists = o.type === 'fill' ? o.paths.map(l => [l, true]) : [[o.points, false]];
+    const lists = o.type === 'fill' ? o.paths.map(l => [l, true]) : [[o.points, o.type === 'shape' && !!o.closed]];
     let best = null;
     lists.forEach(([l, closed]) => {
       const n = closed ? l.length : l.length - 1;
@@ -687,7 +689,7 @@
       }
     });
     if (!best) return false;
-    const np = o.type === 'satin' ? [best.q[0], best.q[1], best.l[best.i][2]] : best.q;
+    const np = o.type === 'satin' ? [best.q[0], best.q[1], best.l[best.i][2]] : o.type === 'shape' ? [best.q[0], best.q[1], 0] : best.q;
     best.l.splice(best.i + 1, 0, np);
     selNode = o.type === 'fill' ? flatIndex(o, { li: o.paths.indexOf(best.l), pi: best.i + 1 }) : best.i + 1;
     commit(); renderSheet(); draw(); toast('Point added — drag it into place');
@@ -745,6 +747,20 @@
     if (!draft) return;
     ctx.save();
     ctx.strokeStyle = '#f2b134'; ctx.fillStyle = 'rgba(242,177,52,.18)'; ctx.lineWidth = 2;
+    if (draft.type === 'shape') {
+      const P = S.shapePath({ points: draft.points, closed: false });
+      if (P.length > 1) {
+        if (draft.points.length >= 3 && shapeClosed) { ctx.beginPath(); P.forEach((q, i) => { const [x, y] = toPX(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.fillStyle = hexA(currentColor, 0.22); ctx.fill(); }
+        ctx.beginPath(); P.forEach((q, i) => { const [x, y] = toPX(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+        if (draft.points.length >= 3 && shapeClosed) { const a = toPX(P[P.length - 1]), b = toPX(P[0]); ctx.save(); ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.restore(); }
+      }
+      draft.points.forEach((q, i) => {
+        const [x, y] = toPX(q), r = i === 0 && draft.points.length >= 3 ? 8 : 5;
+        ctx.beginPath(); if (q[2]) ctx.rect(x - r, y - r, 2 * r, 2 * r); else ctx.arc(x, y, r, 0, 7);
+        ctx.fillStyle = i === 0 && draft.points.length >= 3 ? '#f2b134' : q[2] ? '#16181d' : '#ff5a5a'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
+      });
+      ctx.restore(); return;
+    }
     if (draft.type === 'fill') {
       draft.loops.forEach((l, li) => {
         if (!l.length) return;
@@ -895,6 +911,7 @@
       if (o.type === 'satin' && o.mode === 'rails') { const R = S.streamRails(o); if (R && (R.closed ? (pointInLoops(p, [R.A, R.B])) : pointInLoops(p, [R.A.concat(R.B.slice().reverse())]))) return o; continue; }
       if (o.type === 'satin' && distToPolyline(p, o.points) < Math.max(tol, (o.points[0] && o.points[0][2] || 3) / 2)) return o;
       if (o.type === 'run' && distToPolyline(p, o.points) < tol) return o;
+      if (o.type === 'shape') { const P = S.shapePath(o, 6); if (o.closed && (o.stitch || 'fill') !== 'run' && P.length > 2 && pointInLoops(p, [P])) return o; if (distToPolyline(p, o.closed ? P.concat([P[0]]) : P) < Math.max(tol, o.stitch === 'satin' && !o.closed ? (o.width || 3) / 2 : 0)) return o; }
     }
     return null;
   }
@@ -1248,6 +1265,13 @@
   // ---------------- pointer handling (1 finger = tool, 2 fingers = pan/zoom)
   const pointers = new Map();
   let gesture = null;
+  let lastAlt = false;
+  cv.addEventListener('pointerdown', e => { lastAlt = !!(e.altKey || e.shiftKey); }, true);
+  cv.addEventListener('dblclick', e => {
+    const o = sel(); if (tool !== 'select' || !o || o.type !== 'shape') return;
+    const k = hitNode(o, toMM(e.offsetX, e.offsetY)); if (k < 0) return;
+    o.points[k][2] = o.points[k][2] ? 0 : 1; selNode = k; commit(); renderSheet(); draw(); toast(o.points[k][2] ? 'Corner point' : 'Curve point');
+  });
   cv.addEventListener('pointerdown', e => {
     cv.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
@@ -1266,7 +1290,7 @@
     if (imgMove && doc.bg && !preview) { gesture.type = 'moveimg'; gesture.last = p; return; }
     if (!preview && !draft && tool !== 'brush' && tool !== 'select') {
       const so = sel();
-      if (so && ['fill', 'satin', 'run'].includes(so.type) && !so.edge) { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
+      if (so && ['fill', 'satin', 'run', 'shape'].includes(so.type) && !so.edge) { const k = hitNode(so, p); if (k >= 0) { gesture.type = 'node'; gesture.k = k; selNode = k; renderSheet(); draw(); return; } }
     }
     if (tool === 'brush' && !preview) { gesture.type = 'brush'; stroke = [p]; draw(); return; }
     if (tool === 'pick' && !preview) { gesture.type = 'pickstroke'; stroke = [p]; return; }
@@ -1303,7 +1327,7 @@
         if (hitObject(p) === o) { gesture.type = 'moveobj'; gesture.last = p; return; }
       }
     }
-    if (draft && (tool === 'fill' || tool === 'satin' || tool === 'run' || tool === 'stream')) {
+    if (draft && (tool === 'fill' || tool === 'satin' || tool === 'run' || tool === 'stream' || tool === 'shape')) {
       // drag an existing draft node
       const list = draft.type === 'fill' ? draft.loops[draft.loops.length - 1] : draft.points;
       const tol = 16 / view.s;
@@ -1418,7 +1442,7 @@
     if (preview) return;
     draftRedo = [];
     if (isoArm) { isoArm = false; hint(''); isolateAt(sel(), p); return; }
-    if (tool === 'select' && sel() && ['fill', 'satin', 'run'].includes(sel().type) && insertPoint(sel(), p)) return;
+    if (tool === 'select' && sel() && ['fill', 'satin', 'run', 'shape'].includes(sel().type) && insertPoint(sel(), p)) return;
     if (tool === 'auto' && autoPickSrc) {
       autoPickSrc = false; hint('');
       const b = doc.bg; if (!b || !bgImg) return;
@@ -1449,6 +1473,7 @@
     if (tool === 'stream') { streamTap(p); return; }
     if (tool === 'satin') { if (!draft) draft = { type: 'satin', points: [], rails: satinMode === 'rails' }; draft.points.push([p[0], p[1], doc.satinWidth]); if (draft.rails) hint(draft.points.length % 2 ? 'Now tap the opposite edge' : 'Tap the first edge again, a little further along'); renderSheet(); draw(); return; }
     if (tool === 'run') { if (!draft) draft = { type: 'run', points: [] }; draft.points.push([p[0], p[1]]); renderSheet(); draw(); return; }
+    if (tool === 'shape') { shapeTap(p); return; }
     if (tool === 'text') { textAt = p; renderSheet(); draw(); return; }
   }
 
@@ -1471,8 +1496,73 @@
     if (Math.abs(T.area(loop)) < 1) { toast('Trace all the way around the part you want'); draw(); return; }
     tracedFill([loop], 'Traced ' + currentColor);
   }
+  // ---------------- SHAPE tool: draw once, choose your stitch (run / satin / fill)
+  function shapeTap(p, corner) {
+    if (!draft || draft.type !== 'shape') draft = { type: 'shape', points: [] };
+    const L = draft.points, tol = 14 / view.s;
+    if (L.length >= 3 && Math.hypot(L[0][0] - p[0], L[0][1] - p[1]) < tol) { finishShape(true); return; }   // tap the first point: close it
+    const last = L[L.length - 1];
+    if (last && Math.hypot(last[0] - p[0], last[1] - p[1]) < tol) { last[2] = last[2] ? 0 : 1; toast(last[2] ? 'Corner point' : 'Curve point'); renderSheet(); draw(); return; }   // tap the last point again: corner <-> curve
+    L.push([p[0], p[1], (corner || shapeCorner || lastAlt) ? 1 : 0]);
+    hint(L.length < 3 ? 'Keep tapping around the shape' : 'Tap the first point to close it — or Done for an open line');
+    renderSheet(); draw();
+  }
+  function finishShape(close) {
+    if (!draft || draft.type !== 'shape') return;
+    const pts = draft.points;
+    const closed = !!close && pts.length >= 3;
+    if (pts.length < 2) { toast('Tap at least 2 points'); return; }
+    let stitch = shapeStitch;
+    if (!closed && stitch === 'fill') stitch = 'run';
+    draft = null;
+    addObject({ type: 'shape', name: 'Shape · ' + (stitch === 'run' ? 'line' : stitch), points: pts, closed, stitch, outline: 'none', width: doc.satinWidth || 3, spacing: stitch === 'fill' ? (pick.density || 0.4) : 0.4, underlay: true, passes: 1, stitchLen: 2.5, color: currentColor });
+    setTool('select', true);
+    toast('Shape made — switch Run / Satin / Fill any time');
+  }
+  // bake a shape into a normal fill / satin / line layer (for the advanced tools)
+  function shapeToLayer(o) {
+    const P = S.shapePath(o);
+    const base = { name: o.name, color: o.color, threadName: o.threadName, underlay: o.underlay };
+    let n;
+    if (o.stitch === 'fill' && o.closed) n = Object.assign(base, { type: 'fill', paths: [T.simplify(P, 0.08)], angle: o.angle == null ? Math.round(S.shapeAxis(P)) : o.angle, spacing: o.spacing || 0.4, stitchLen: 3.5, pullComp: o.pullComp == null ? 0.2 : o.pullComp });
+    else if (o.stitch === 'satin' && o.closed) { const R = S.shapeRails(P); const k = Math.max(1, Math.round(R.pts.length / 2 / 24)); const pts = []; for (let i = 0; i < R.pts.length / 2; i += k) pts.push(R.pts[2 * i], R.pts[2 * i + 1]); if (pts[pts.length - 1] !== R.pts[R.pts.length - 1]) pts.push(R.pts[R.pts.length - 2], R.pts[R.pts.length - 1]); n = Object.assign(base, { type: 'satin', mode: 'rails', curve: true, points: pts.map(q => [q[0], q[1]]), spacing: o.spacing || 0.4, pullComp: 0.15 }); }
+    else if (o.stitch === 'satin') n = Object.assign(base, { type: 'satin', points: T.simplify(P, 0.08).map(q => [q[0], q[1], o.width || 3]), spacing: o.spacing || 0.4, pullComp: 0.15 });
+    else n = Object.assign(base, { type: 'run', points: T.simplify(o.closed ? P.concat([P[0]]) : P, 0.08), stitchLen: o.stitchLen || 2.5, passes: o.passes || 1, curve: false });
+    const i = doc.objects.indexOf(o); n.id = o.id; doc.objects[i] = n; selNode = -1; commit(); renderSheet(); draw();
+    toast('Now a normal ' + (n.type === 'run' ? 'line' : n.type) + ' layer');
+  }
+  const SHAPE_ICONS = {
+    run: '<svg viewBox="0 0 48 48" width="40" height="40"><path d="M8 40C8 22 22 8 40 8c0 18-14 32-32 32z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="4 3"/></svg>',
+    satin: '<svg viewBox="0 0 48 48" width="40" height="40"><defs><pattern id="sIc" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect width="3" height="1.6" fill="currentColor"/></pattern></defs><path d="M8 40C8 22 22 8 40 8c0 18-14 32-32 32z" fill="url(#sIc)" stroke="currentColor" stroke-width="1.6"/><path d="M8 40 40 8" stroke="#fff" stroke-width="1.2" opacity=".8"/></svg>',
+    fill: '<svg viewBox="0 0 48 48" width="40" height="40"><defs><pattern id="fIc" width="4" height="4" patternUnits="userSpaceOnUse"><path d="M0 1h3M1 3h3" stroke="currentColor" stroke-width="1.1"/></pattern></defs><path d="M8 40C8 22 22 8 40 8c0 18-14 32-32 32z" fill="url(#fIc)" stroke="currentColor" stroke-width="1.6"/></svg>'
+  };
+  function stitchCards(cur, closed) {
+    return `<div id="shStitch" style="display:flex;gap:8px;margin:4px 0 10px">${[['run', 'Run'], ['satin', 'Satin'], ['fill', 'Fill']].map(([k, l]) => { const off = k === 'fill' && closed === false; return `<button data-v="${k}" class="btn ${cur === k ? 'primary' : ''}" ${off ? 'disabled title="Fill needs a closed shape"' : ''} style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;${off ? 'opacity:.4' : ''}">${SHAPE_ICONS[k]}<b>${l}</b></button>`; }).join('')}</div>`;
+  }
+  function renderShapeDrawSheet() {
+    const n = draft && draft.type === 'shape' ? draft.points.length : 0;
+    hint(n ? (n < 3 ? 'Keep tapping around the shape' : 'Tap the first point to close it — or Done for an open line') : 'Tap around the shape: each tap is a point. Tap the last point again to make it a sharp corner.');
+    const parts = [`<div class="sec"><div class="toggle" id="dKind" style="display:flex;margin-bottom:8px">${[['shape', '✦ Shape'], ['fill', 'Fill'], ['satin', 'Satin'], ['run', 'Line']].map(([k, l]) => `<button data-v="${k}" class="${tool === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div>
+      <h3>Draw once · choose your stitch</h3>
+      <p class="small" style="margin:0 0 6px">Trace the outline once. Run, Satin or Fill can be switched any time after — the shape stays the same.</p>
+      ${stitchCards(shapeStitch, null)}
+      <div class="row"><label>Next point</label><div class="toggle" id="shCorner"><button data-v="0" class="${!shapeCorner ? 'on' : ''}">● Curve</button><button data-v="1" class="${shapeCorner ? 'on' : ''}">■ Corner</button></div></div>
+      <p class="small" style="margin:0 0 6px">Curve points bend smoothly; corner points stay sharp (leaf tips, letter corners). PC: hold Shift while clicking for a corner.</p>`];
+    parts.push(colorPicker(currentColor, c => { currentColor = c; renderSheet(); }));
+    if (shapeStitch === 'satin') parts.push(slider('Column width (open lines)', 'sw', 0.8, 8, 0.1, doc.satinWidth, ' mm', v => { doc.satinWidth = v; }));
+    parts.push(`<div class="btns" style="margin-top:10px">${btn('shClose', 'Close shape ✓', 'primary')}${btn('shOpen', 'Done (open line)')}${btn('dBack', 'Undo point')}${btn('dCancel', 'Cancel', 'danger')}</div></div>`);
+    mount(parts);
+    $('#dKind').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => setTool(b2.dataset.v)));
+    $('#shStitch').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { shapeStitch = b2.dataset.v; renderSheet(); }));
+    $('#shCorner').querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { shapeCorner = b2.dataset.v === '1'; renderSheet(); }));
+    on('shClose', () => { if (!draft || draft.points.length < 3) { toast('Tap at least 3 points to close a shape'); return; } finishShape(true); });
+    on('shOpen', () => finishShape(false));
+    on('dBack', () => { if (draft && draft.points) draft.points.pop(); renderSheet(); draw(); });
+    on('dCancel', () => { draft = null; setTool('select'); });
+  }
   function finishDraft() {
     if (!draft) return;
+    if (draft.type === 'shape') return finishShape(shapeClosed);
     if (draft.type === 'fill') {
       const loops = draft.loops.filter(l => l.length >= 3);
       if (!loops.length) { toast('A fill needs at least 3 points'); return; }
@@ -2543,7 +2633,7 @@
 
   function setTool(t, keepSel) {
     if (draft && t !== tool) draft = null;
-    if (t === 'fill' || t === 'satin' || t === 'run') drawKind = t;
+    if (t === 'shape' || t === 'fill' || t === 'satin' || t === 'run') drawKind = t;
     if (t !== 'select' && t !== 'layers') bgSel = false;
     if (t !== 'stream') streamIns = false;
     tool = t; if (!keepSel && t !== 'select' && t !== 'layers' && t !== 'brush' && t !== 'pick' && t !== 'stream') selId = null;
@@ -2555,6 +2645,7 @@
   function renderSheet() {
     hint(''); if (mhOverlay) { mhOverlay = null; draw(); }
     if (preview) return renderPreviewSheet();
+    if (tool === 'shape') return renderShapeDrawSheet();
     if (tool === 'fill' || tool === 'satin' || tool === 'run') return renderDrawSheet();
     if (tool === 'brush') return renderBrushSheet();
     if (tool === 'pick') return renderPickSheet();
@@ -2902,7 +2993,7 @@
     const tips = { fill: 'Tap around the shape. Tap the first point to close it.', satin: 'Tap along the middle of the column. Set the width first.', run: 'Tap along the line.' };
     hint(tips[tool]);
     fillMode = 'points';
-    const parts = [`<div class="sec"><div class="toggle" id="dKind" style="display:flex;margin-bottom:8px">${[['fill', 'Fill'], ['satin', 'Satin'], ['run', 'Line']].map(([k, l]) => `<button data-v="${k}" class="${tool === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div><h3>${names[tool]}</h3>`];
+    const parts = [`<div class="sec"><div class="toggle" id="dKind" style="display:flex;margin-bottom:8px">${[['shape', '✦ Shape'], ['fill', 'Fill'], ['satin', 'Satin'], ['run', 'Line']].map(([k, l]) => `<button data-v="${k}" class="${tool === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div><h3>${names[tool]}</h3>`];
     if (tool === 'fill') {
       if (fillTrace === 'freehand') hint('Pick a colour, then trace around the part with your finger');
       parts.push(`<div class="row"><label>Trace</label><div class="toggle" id="fTrace"><button data-v="freehand" class="${fillTrace === 'freehand' ? 'on' : ''}">Freehand</button><button data-v="points" class="${fillTrace === 'points' ? 'on' : ''}">Tap points</button></div></div>`);
@@ -2944,6 +3035,7 @@
     } else if (o.type === 'satin' && o.edge) { edgeMove(o, f); o.edge.w *= k; o.edge.gap = (o.edge.gap || 0) * k; if (fx !== fy) o.edge.side = -o.edge.side; regenEdge(o); }
     else if (o.type === 'satin') o.points.forEach(q => { f(q); q[2] = (q[2] || o.width || 3) * k; });
     else if (o.type === 'run') o.points.forEach(f);
+    else if (o.type === 'shape') { o.points.forEach(f); if (o.width) o.width *= k; if (o.angle != null) { if (fx !== fy) o.angle = -o.angle; o.angle = ((Math.round(o.angle + (rotDeg || 0)) + 90) % 180 + 180) % 180 - 90; } }
     else if (o.type === 'stitches') { o.lines.forEach(l => l.forEach(f)); o.scaleK = (o.scaleK || 1) * k; }
     else if (o.type === 'import') { o.blocks.forEach(bl => bl.lines.forEach(l => l.forEach(f))); o.scaleK = (o.scaleK || 1) * k; }
     else if (o.type === 'text') { const q = [o.x, o.y]; f(q); o.x = q[0]; o.y = q[1]; const kt = Math.abs(kx - 1) > Math.abs(ky - 1) ? kx : ky; o.size *= kt; if (o.bend) o.bend /= kt; if (kx !== ky) o.spacingLetters = (o.spacingLetters || 0) + 0; layoutText(o); }
@@ -3067,7 +3159,7 @@
   }
   function renderProps(o) {
     const set = (k, v, final) => { o[k] = v; if (o.type === 'text' && ['size', 'bend', 'font', 'text', 'style', 'spacingLetters'].includes(k)) layoutText(o); draw(); if (final) commit(); };
-    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type]}</h3>`];
+    const parts = [`<div class="sec"><h3>${esc(o.name || o.type)} · ${{ shape: 'draw once, choose stitch', fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Imported stitches', import: 'Imported design' }[o.type] || o.type}</h3>`];
     parts.push(colorPicker(o.color, c => { o.color = c; currentColor = c; commit(); renderSheet(); draw(); }));
     if (o.type === 'import') {
       const k = Math.min(o.blocks.length - 1, renderProps.blk || 0);
@@ -3094,6 +3186,32 @@
     }
     if (o.type === 'stitches') parts.push(`<p class="small" style="margin:8px 0 0">Imported stitches are kept exactly as they were digitized. Drag inside the box to move them; change the thread colour above; use Sew earlier / later to set the order.</p><div class="btns" style="margin-top:8px">${btn('pErase', '🧽 Erase stitches')}${btn('pCut', '✂ Cut out area')}</div>`);
     parts.push('</div><div class="sec"><h3>Stitches</h3>');
+    if (o.type === 'shape') {
+      const st = o.stitch || (o.closed ? 'fill' : 'run');
+      parts.push(`<p class="small" style="margin:0 0 4px">Same outline — pick how it sews:</p>${stitchCards(st, !!o.closed)}`);
+      parts.push(`<div class="row"><label>Outline</label><div class="toggle" id="shCl"><button data-v="1" class="${o.closed ? 'on' : ''}">Closed shape</button><button data-v="0" class="${!o.closed ? 'on' : ''}">Open line</button></div></div>`);
+      const nk = selNode >= 0 && selNode < o.points.length ? o.points[selNode] : null;
+      parts.push(`<div class="row"><label>Point</label>${nk ? btn('shNode', nk[2] ? '● Make it a curve' : '■ Make it a corner') : '<span class="small">Tap a point to make it sharp or smooth (or double-click it)</span>'}</div>`);
+      if (st === 'run') {
+        parts.push(slider('Stitch length', 'sl', 0.8, 5, 0.1, o.stitchLen || 2.5, ' mm', (v, f) => set('stitchLen', v, f)));
+        parts.push(`<div class="row"><label>Thickness</label><div class="toggle" id="tPass"><button data-v="1" class="${(o.passes || 1) === 1 ? 'on' : ''}">Single</button><button data-v="3" class="${o.passes === 3 ? 'on' : ''}">Triple (bean)</button></div></div>`);
+      }
+      if (st === 'satin') {
+        if (!o.closed) parts.push(slider('Column width', 'w', 0.6, 8, 0.1, o.width || 3, ' mm', (v, f) => set('width', v, f)));
+        else { const R = S.shapeRails(S.shapePath(o)); parts.push(`<p class="small" style="margin:0 0 6px">The satin runs across the shape and turns with it from tip to tip. Widest point: <b>${R.width.toFixed(1)} mm</b>${R.width > 8 ? ' — long stitches get split so they don’t snag; Fill is usually better this wide.' : '.'}</p>`); }
+      }
+      if (st === 'fill') {
+        parts.push(slider('Angle', 'ang', -90, 90, 1, o.angle == null ? Math.round(S.shapeAxis(S.shapePath(o))) : o.angle, '°', (v, f) => set('angle', v, f)));
+        parts.push(`<div class="row"><label></label>${btn('shAuto', o.angle == null ? '✓ Angle follows the shape' : '↺ Angle follows the shape')}</div>`);
+      }
+      if (st !== 'run') {
+        parts.push(densityPresets(o));
+        parts.push(slider('Density', 'den', 0.15, 1.2, 0.01, o.spacing || 0.4, ' mm', (v, f) => set('spacing', v, f)));
+        parts.push(slider('Pull comp', 'pc', 0, 0.6, 0.01, o.pullComp == null ? (st === 'fill' ? 0.2 : 0.15) : o.pullComp, ' mm', (v, f) => set('pullComp', v, f)));
+        if (o.closed) parts.push(`<div class="row"><label>Edge</label><div class="toggle" id="shOl">${[['none', 'None'], ['run', 'Thin run'], ['bean', 'Bold bean']].map(([k, l]) => `<button data-v="${k}" class="${(o.outline || 'none') === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>`);
+      }
+      parts.push(`<div class="btns" style="margin:6px 0">${btn('shBake', '⇢ Convert to normal layer')}</div><p class="small" style="margin:0 0 6px">Turns it into a plain fill / satin / line layer to use the advanced tools (flow, borders, streamline points). The Run/Satin/Fill switch goes away.</p>`);
+    }
     if (o.type === 'fill') {
       if (!o.sand) parts.push(`<div class="row"><label>Direction</label><div class="toggle" id="tWrap"><button data-v="0" class="${!o.wrap ? 'on' : ''}">Straight angle</button><button data-v="1" class="${o.wrap ? 'on' : ''}">↻ Wrap around</button></div></div>`);
       if (o.wrap && !o.flow && !o.sand) parts.push(`<p class="small" style="margin:0 0 6px">Thread runs edge to edge and turns with the shape — curves like the bend of a 3 or an S fan around smoothly. Works best on borders, letters and strokes up to about 8 mm wide; for big open areas use Straight angle or Brush → Flow. Tip: right-click (PC) or ✂ Isolate part to give one piece of a layer its own direction.</p>`);
@@ -3173,6 +3291,14 @@
     if (o.type === 'stitches') { on('pErase', () => startEraser(o, 'erase', null)); on('pCut', () => startEraser(o, 'cut', null)); }
     if (o.type === 'text') bindText(o);
     const tog = (id, fn) => { const el = $('#' + id); if (el) el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { fn(b.dataset.v); commit(); renderSheet(); draw(); })); };
+    if (o.type === 'shape') {
+      const sh = $('#shStitch'); if (sh) sh.querySelectorAll('button').forEach(b2 => b2.addEventListener('click', () => { if (b2.disabled) return; o.stitch = b2.dataset.v; o.name = 'Shape · ' + (o.stitch === 'run' ? 'line' : o.stitch); if (o.stitch === 'fill' && !o.spacing) o.spacing = 0.4; commit(); renderSheet(); draw(); }));
+      tog('shCl', v => { o.closed = v === '1' && o.points.length >= 3; if (!o.closed && o.stitch === 'fill') o.stitch = 'run'; });
+      tog('shOl', v => { o.outline = v; });
+      on('shNode', () => { const q = o.points[selNode]; if (!q) return; q[2] = q[2] ? 0 : 1; commit(); renderSheet(); draw(); });
+      on('shAuto', () => { o.angle = null; commit(); renderSheet(); draw(); });
+      on('shBake', () => shapeToLayer(o));
+    }
     tog('tPass', v => o.passes = +v); tog('tCurve', v => o.curve = v === '1'); tog('tUnder', v => o.underlay = v === '1');
     tog('tStyle', v => { o.style = v; layoutText(o); });
     tog('tWrap', v => { o.wrap = v === '1'; if (o.wrap) { delete o.flow; if (!o.satinLook) { o.satinLook = true; o.stitchLen = 12; o.pullComp = 0.15; } } });
@@ -3204,7 +3330,7 @@
     on('pDelNode', () => {
       if (selNode < 0) { toast('Tap a point first'); return; }
       const n = nodeAt(o, selNode); const arr = o.type === 'fill' ? o.paths[n.li] : o.points;
-      if (arr.length <= (o.type === 'fill' ? 3 : 2)) { toast('Too few points left'); return; }
+      if (arr.length <= (o.type === 'fill' || (o.type === 'shape' && o.closed) ? 3 : 2)) { toast('Too few points left'); return; }
       arr.splice(n.pi, 1); selNode = -1; commit(); renderSheet(); draw();
     });
   }

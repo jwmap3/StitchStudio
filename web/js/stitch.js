@@ -838,8 +838,93 @@
     return [{ pts: out, kind: 'top' }];
   }
 
+  // ---------- SHAPE: "draw once, choose your stitch". The outline is a list of nodes
+  // [x, y, corner]; curve nodes get a smooth curve through them, corner nodes stay sharp.
+  // The same outline sews as a running line, a satin column or a tatami fill.
+  function shapePath(o, sub) {
+    const N = (o.points || []).filter(p => p && isFinite(p[0]) && isFinite(p[1]));
+    const n = N.length, closed = !!o.closed && n >= 3;
+    if (n < 2) return N.map(p => [p[0], p[1]]);
+    sub = sub || 10;
+    const get = i => closed ? N[(i + n) % n] : N[Math.max(0, Math.min(n - 1, i))];
+    const m = closed ? n : n - 1, out = [];
+    for (let i = 0; i < m; i++) {
+      const p1 = get(i), p2 = get(i + 1);
+      const p0 = p1[2] ? p1 : get(i - 1), p3 = p2[2] ? p2 : get(i + 2);   // a corner uses itself: the tangent stops there
+      const straight = p1[2] && p2[2];
+      for (let k = 0; k < (straight ? 1 : sub); k++) {
+        const t = k / sub, t2 = t * t, t3 = t2 * t;
+        if (straight) { out.push([p1[0], p1[1]]); continue; }
+        const f = j => 0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3);
+        out.push([f(0), f(1)]);
+      }
+    }
+    if (!closed) out.push([N[n - 1][0], N[n - 1][1]]);
+    return out.filter((p, i) => i === 0 || hyp(p, out[i - 1]) > 1e-4);
+  }
+  S.shapePath = shapePath;
+  const polyLen = (P, closed) => { let L = 0; for (let i = 1; i < P.length; i++) L += hyp(P[i - 1], P[i]); if (closed && P.length > 2) L += hyp(P[P.length - 1], P[0]); return L; };
+  // main direction of a shape (degrees), from its outline
+  function shapeAxis(P) {
+    let mx = 0, my = 0; P.forEach(q => { mx += q[0]; my += q[1]; }); mx /= P.length; my /= P.length;
+    let sxx = 0, syy = 0, sxy = 0; P.forEach(q => { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; });
+    return 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI;
+  }
+  S.shapeAxis = shapeAxis;
+  // a closed outline as two rails from tip to tip (for a satin that turns along the shape)
+  function shapeRails(P) {
+    const n = P.length;
+    const a = shapeAxis(P) * Math.PI / 180, ux = Math.cos(a), uy = Math.sin(a);
+    let i0 = 0, i1 = 0, lo = Infinity, hi = -Infinity;
+    P.forEach((q, i) => { const s = q[0] * ux + q[1] * uy; if (s < lo) { lo = s; i0 = i; } if (s > hi) { hi = s; i1 = i; } });
+    const side1 = [], side2 = [];
+    for (let k = i0; ; k = (k + 1) % n) { side1.push(P[k]); if (k === i1) break; }
+    for (let k = i0; ; k = (k - 1 + n) % n) { side2.push(P[k]); if (k === i1) break; }
+    const at = (S2, u) => { const L = polyLen(S2, false); let s = u * L; for (let i = 1; i < S2.length; i++) { const d = hyp(S2[i - 1], S2[i]); if (s <= d || i === S2.length - 1) { const f = d ? Math.min(1, s / d) : 0; return [S2[i - 1][0] + (S2[i][0] - S2[i - 1][0]) * f, S2[i - 1][1] + (S2[i][1] - S2[i - 1][1]) * f]; } s -= d; } return S2[S2.length - 1]; };
+    const L = Math.max(polyLen(side1, false), polyLen(side2, false));
+    const M = Math.max(3, Math.round(L / 0.9));
+    const pts = [];
+    for (let i = 0; i <= M; i++) { const u = i / M; pts.push(at(side1, u), at(side2, u)); }
+    // pull the very tips in a hair so the satin doesn't start on a single point
+    return { pts, width: Math.max(...pts.filter((_, i) => i % 2 === 0).map((p, i) => hyp(p, pts[2 * i + 1]))) };
+  }
+  S.shapeRails = shapeRails;
+  function shapeObject(o) {
+    const closed = !!o.closed && (o.points || []).length >= 3;
+    const P = shapePath(o);
+    if (P.length < 2) return [];
+    const stitch = o.stitch || (closed ? 'fill' : 'run');
+    const runOf = (pts, cl, len, passes) => runObject({ points: pts, closed: cl, curve: false, stitchLen: len, passes });
+    let pieces = [];
+    if (stitch === 'run' || (stitch === 'fill' && !closed)) {
+      return runOf(P, closed, o.stitchLen || 2.5, o.passes || 1);
+    }
+    if (stitch === 'fill') {
+      const ang = o.angle == null ? Math.round(shapeAxis(P)) : o.angle;
+      pieces = fillObject({ paths: [P], angle: ang, spacing: o.spacing || 0.4, stitchLen: o.fillLen || 3.5, underlay: o.underlay !== false, pullComp: o.pullComp == null ? 0.2 : o.pullComp });
+    } else if (stitch === 'satin') {
+      if (!closed) {
+        const C = resamplePolyline(P, 1.2, false);
+        pieces = satinObject({ points: C.map(q => [q[0], q[1], o.width || 3]), spacing: o.spacing || 0.4, underlay: o.underlay !== false, pullComp: o.pullComp == null ? 0.15 : o.pullComp });
+      } else {
+        const R = shapeRails(P);
+        pieces = railSatin({ points: R.pts, closed: false, curve: false, spacing: o.spacing || 0.4, underlay: o.underlay !== false, pullComp: o.pullComp == null ? 0.15 : o.pullComp, splitAt: o.splitAt || 8 });
+      }
+    }
+    if (closed && (o.outline === 'run' || o.outline === 'bean')) {
+      // start the outline where the fill/satin finished, so there's no trim
+      const end = pieces.length ? pieces[pieces.length - 1].pts.slice(-1)[0] : null;
+      let Q = P;
+      if (end) { let bi = 0, bd = Infinity; P.forEach((q, i) => { const d = hyp(q, end); if (d < bd) { bd = d; bi = i; } }); Q = P.slice(bi).concat(P.slice(0, bi)); }
+      runOf(Q, true, o.outline === 'bean' ? 2.0 : 2.2, o.outline === 'bean' ? 3 : 1).forEach(pc => pieces.push({ pts: pc.pts, kind: 'top' }));
+    }
+    return pieces;
+  }
+  S.shapeObject = shapeObject;
+
   S.objectPieces = function (o) {
     if (o.hidden) return [];
+    if (o.type === 'shape') return shapeObject(o);
     if (o.type === 'fill') return fillObject(o);
     if (o.type === 'satin') return satinObject(o);
     if (o.type === 'run') return runObject(o);
@@ -1003,9 +1088,10 @@
       if (o.type === 'stitches' || o.type === 'satin') return stitchMaskOf(o);
       let loops = null;
       if (o.type === 'fill' && o.paths) loops = o.paths;
+      else if (o.type === 'shape' && o.closed && (o.stitch || 'fill') !== 'run' && (o.points || []).length >= 3) loops = [shapePath(o, 6)];
       else if (o.type === 'text' && o.glyphs) loops = o.glyphs.flatMap(g => g.paths || []);
       if (!loops || !loops.length) return null;
-      const keyObj = o.type === 'fill' ? o.paths : o.glyphs;
+      const keyObj = o.type === 'fill' ? o.paths : o.type === 'shape' ? o.points : o.glyphs;
       // geometry fingerprint: shapes are edited in place (move, resize, drag points), so check it still matches
       let fp = 0, np = 0; loops.forEach(l => { np += l.length; for (let i = 0; i < l.length; i += Math.max(1, l.length >> 3)) fp = (fp * 31 + Math.round(l[i][0] * 100) * 7 + Math.round(l[i][1] * 100)) | 0; });
       fp = fp + ':' + np;

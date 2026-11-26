@@ -10,7 +10,7 @@
   const IN = 25.4, ACTUAL = 96 / 25.4;   // CSS px per mm at 100%
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const inch = mm => (mm / IN).toFixed(2);
-  const TYPE = { fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Stitches', import: 'Imported design' };
+  const TYPE = { shape: 'Shape', fill: 'Fill', satin: 'Satin', run: 'Line', text: 'Text', stitches: 'Stitches', import: 'Imported design' };
 
   // ---------------- dropdown menus
   const closeDD = () => { document.querySelectorAll('.dd.open').forEach(d => d.classList.remove('open')); document.querySelectorAll('.mb.open').forEach(b => b.classList.remove('open')); };
@@ -286,7 +286,7 @@
       const dot = o.type === 'import' ? `conic-gradient(${o.blocks.map((b, k) => `${b.color} ${k / o.blocks.length * 100}% ${(k + 1) / o.blocks.length * 100}%`).join(',')})` : o.color;
       return `<div class="lr ${o.id === sid || (mids.length > 1 && mids.includes(o.id)) ? 'on' : ''} ${o.hidden || !SS.inView(o) ? 'hid' : ''}" draggable="true" data-id="${o.id}">
         <span class="num" ${ol.includes(o.id) ? `style="background:${SS.pickKind() === 'iso' ? '#4cc2ff' : '#f2b134'};color:#16181d;border-radius:999px;font-weight:700"` : ''}>${ol.includes(o.id) ? (SS.pickKind() === 'iso' ? '◎' : '#' + (ol.indexOf(o.id) + 1)) : i + 1}</span><span class="dot" style="background:${dot}"></span>
-        <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}${o.type === 'import' ? ' · ' + o.blocks.length + ' threads' : ''}</small></span>
+        <span class="nm"><b>${esc(o.name || TYPE[o.type])}</b><small>${TYPE[o.type] || o.type}${o.type === 'fill' ? (o.satinLook ? ' · satin' : ' · tatami') : ''}${o.type === 'shape' ? ' · ' + ({ run: 'run', satin: 'satin', fill: 'fill' }[o.stitch] || 'fill') : ''}${o.type === 'import' ? ' · ' + o.blocks.length + ' threads' : ''}</small></span>
         ${o.type === 'import' && o.blocks.length > 1 ? `<button class="eye" data-tog="1" title="${!thrShut.has(o.id) ? 'Hide' : 'Show'} its threads"><svg viewBox="0 0 24 24">${!thrShut.has(o.id) ? '<path d="m6 15 6-6 6 6"/>' : '<path d="m6 9 6 6 6-6"/>'}</svg></button>` : ''}
         <button class="eye" data-eye="1" title="Show / hide"><svg viewBox="0 0 24 24">${o.hidden ? '<path d="M3 3l18 18"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" opacity=".4"/>' : '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg></button></div>
 ${o.type === 'import' && o.blocks.length > 1 && !thrShut.has(o.id) ? SS.threadRows(o).map(t => `<div class="lr thr ${t.on ? 'on' : ''}" data-tid="${o.id}" data-k="${t.k}" style="padding-left:26px;min-height:0">
